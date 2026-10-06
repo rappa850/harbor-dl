@@ -2,7 +2,7 @@
 
 快速开始见 [README](../README.md#快速开始docker-compose)。本文说明镜像内容与构建方式。
 
-> 已在 Ubuntu 26.04（WSL2，Docker 29，linux/amd64）上构建并运行验证：镜像可构建；容器启动后健康检查通过，前端与深链接可访问，连续重启 3 次稳定；创建管理员后可启动内嵌登录浏览器（Chromium 在虚拟显示里运行），`/novnc` 未登录返回 401、登录后返回 200。**未验证**：真实的抖音登录流程、桥接网络下的端口映射。
+> 验证情况：已在 NAS 上用该镜像实测通过——注册登录、抖音登录并保存、订阅博主、下载、播放与沉浸式播放。另在 Ubuntu 26.04（WSL2，Docker 29，linux/amd64）上验证过构建、启动、重启稳定性和内嵌登录浏览器（`/novnc` 未登录 401、登录后 200）。**未验证**：直播录制（功能未完成）、arm64（不提供）、桥接网络下的端口映射。
 
 ## 使用预构建镜像
 
@@ -35,7 +35,7 @@ docker run -d --name harbor-dl -p 8765:8765 --shm-size=1g -v $PWD/data:/data har
 
 | 工作流 | 触发 | 作用 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | 推送到 `main`、拉取请求 | 运行后端与前端测试，构建前端 |
+| `.github/workflows/ci.yml` | 推送到 `main`、拉取请求 | 运行后端与前端测试，构建前端（4 个直播录制测试在 Linux 上跳过，见 `tests/test_live_recording.py`） |
 | `.github/workflows/docker.yml` | 推送到 `main`、`v*` 标签、相关路径的拉取请求、手动 | 构建镜像（amd64）；拉取请求只构建不推送；其余推送到 `ghcr.io/<owner>/harbor-dl` |
 
 镜像标签：`latest`（主分支）、`main`、`sha-<短哈希>`，以及打 `v1.2.3` 标签时的 `1.2.3` 和 `1.2`。首次推送后，在仓库的 Packages 页面把镜像设为 Public，匿名用户才能拉取。
