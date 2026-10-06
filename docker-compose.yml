@@ -1,0 +1,14 @@
+# Harbor-DL, prebuilt image. Start with:  docker compose up -d     then open http://localhost:8765
+services:
+  harbor-dl:
+    image: ghcr.io/rappa850/harbor-dl:latest
+    container_name: harbor-dl
+    restart: unless-stopped
+    ports:
+      - "8765:8765"            # put a TLS reverse proxy in front before exposing this beyond your LAN
+    shm_size: "1gb"            # the embedded login browser (Chromium) needs more than the 64 MB default
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/data           # database, downloads, covers, recordings, login-browser profile
+      # - /path/to/media-library:/data/library   # Jellyfin / Emby library folder (see README)

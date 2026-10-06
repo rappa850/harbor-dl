@@ -6,6 +6,8 @@ services:
     ports:
       - "8765:8765"        # put a TLS reverse proxy in front before exposing this beyond your LAN
     volumes:
-      - ./data:/data        # database, downloads, recordings and the dedicated login-browser profile
+      - ./data:/data        # database, downloads, covers, media-library export, recordings, login-browser profile
+    environment:
+      TZ: Asia/Shanghai
     shm_size: "1gb"         # Chromium needs more than the 64 MB default
     restart: unless-stopped
