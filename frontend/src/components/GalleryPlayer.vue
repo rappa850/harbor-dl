@@ -2,7 +2,7 @@
 import {ref,computed,watch,onMounted,onUnmounted,nextTick} from 'vue'
 import Icon from './Icon.vue'
 // Picture post viewer: every picture of the post as a slideshow, with the post's music looping underneath.
-const props=defineProps({assetId:{type:String,required:true},title:String,api:Function,chain:Boolean,interval:{type:Number,default:4000}})
+const props=defineProps({assetId:{type:String,required:true},title:String,api:Function,chain:Boolean,interval:{type:Number,default:4000},immersive:Boolean,muted:Boolean})
 const emit=defineEmits(['finished'])
 const info=ref(null),index=ref(0),error=ref(''),playing=ref(true),musicOn=ref(true),blocked=ref(false),musicPlaying=ref(false),volume=ref(0.7)
 const audio=ref(null),stage=ref(null),ratio=ref(1.5)
@@ -41,7 +41,7 @@ const count=computed(()=>info.value?.images.length||0)
 const current=computed(()=>info.value?.images[index.value])
 const src=(id)=>`/api/files/${id}/stream`
 async function load(){
-  try{const data=await props.api(`/files/${props.assetId}/gallery`);await detectRatio(data.images);info.value=data;index.value=data.index||0;error.value=''}
+  try{const data=await props.api(`/files/${props.assetId}/gallery`);if(!props.immersive)await detectRatio(data.images);info.value=data;index.value=data.index||0;error.value=''}
   catch(e){error.value=e.message;return}
   await nextTick();startMusic();schedule();stage.value?.focus()
 }
@@ -75,23 +75,23 @@ onMounted(load)
 onUnmounted(()=>{clearTimeout(timer);audio.value?.pause()})
 </script>
 <template>
-  <div class="gallery" ref="stage" tabindex="0" @keydown="key" aria-label="图集播放器">
+  <div class="gallery" :class="{immersive}" ref="stage" tabindex="0" @keydown="key" aria-label="图集播放器">
     <p v-if="error" class="inline-error" role="alert">{{error}}</p>
     <template v-else-if="info">
-      <div class="gallery-stage" :style="{'--ratio':ratio}">
+      <div class="gallery-stage" :style="{'--ratio':ratio}" @click="immersive&&blocked&&startMusic()">
         <img :key="current.id" class="gallery-image" :src="src(current.id)" :alt="`${title||'图集'} 第 ${index+1} 张`">
         <button v-if="count>1" class="gallery-nav prev" aria-label="上一张" @click="go(index-1)"><Icon name="chevron" :size="22"/></button>
         <button v-if="count>1" class="gallery-nav next" aria-label="下一张" @click="go(index+1)"><Icon name="chevron" :size="22"/></button>
         <span class="gallery-count" aria-live="polite">{{index+1}} / {{count}}</span>
         <div v-if="playing&&count>1" class="gallery-timer" :key="index+'-'+interval" :style="{animationDuration:interval+'ms'}"></div>
       </div>
-      <div v-if="count>1" class="gallery-thumbs" role="tablist" aria-label="图片缩略图"><button v-for="(im,i) in info.images" :key="im.id" role="tab" :aria-selected="i===index" :class="{on:i===index}" :aria-label="`第 ${i+1} 张`" @click="go(i)"><img :src="src(im.id)" alt="" loading="lazy"></button></div>
-      <div class="gallery-bar">
+      <div v-if="count>1&&!immersive" class="gallery-thumbs" role="tablist" aria-label="图片缩略图"><button v-for="(im,i) in info.images" :key="im.id" role="tab" :aria-selected="i===index" :class="{on:i===index}" :aria-label="`第 ${i+1} 张`" @click="go(i)"><img :src="src(im.id)" alt="" loading="lazy"></button></div>
+      <audio v-if="info.audio" ref="audio" :src="src(info.audio.id)" :muted="muted" loop preload="auto" @play="blocked=false;musicPlaying=true" @pause="musicPlaying=false"></audio>
+      <div v-if="!immersive" class="gallery-bar">
         <button v-if="count>1" class="gbtn" :aria-pressed="playing" @click="toggleSlides"><Icon :name="playing?'stop':'play'" :size="14"/> {{playing?'暂停轮播':'自动轮播'}}</button>
         <template v-if="info.audio">
           <button class="gbtn" :class="{alert:blocked}" @click="toggleMusic"><Icon name="music" :size="14"/> {{blocked?'点击播放背景音乐':musicPlaying?'暂停音乐':'播放音乐'}}</button>
           <label class="gvol"><Icon name="music" :size="12"/><input type="range" min="0" max="1" step="0.05" v-model.number="volume" aria-label="音乐音量"></label>
-          <audio ref="audio" :src="src(info.audio.id)" loop preload="auto" @play="blocked=false;musicPlaying=true" @pause="musicPlaying=false"></audio>
         </template>
         <span v-else class="gmuted">这个图集没有背景音乐</span>
       </div>
@@ -115,5 +115,7 @@ onUnmounted(()=>{clearTimeout(timer);audio.value?.pause()})
 .gbtn:hover{background:var(--bg)}.gbtn.alert{background:var(--warning-soft);border-color:var(--warning-border);color:var(--warning-text)}
 .gvol{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:var(--sp-8);margin:0!important;color:var(--text-3)}.gvol input[type=range]{width:96px;padding:0;border:0;accent-color:var(--brand)}
 .gmuted{font-size:var(--fs-12);color:var(--text-3)}.inline-error{background:var(--danger-soft);color:var(--danger-text);border-radius:var(--r-md);padding:var(--sp-12) var(--sp-12);font-size:var(--fs-13);margin:0}
+.gallery.immersive{height:100%;gap:0}
+.immersive .gallery-stage{width:100%;height:100%;aspect-ratio:auto;border-radius:0;background:transparent}
 @media (prefers-reduced-motion:reduce){.gallery-image,.gallery-timer{animation:none}}
 </style>

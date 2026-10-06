@@ -82,6 +82,7 @@ async function runCleanup(){
       <div class="chips" role="tablist"><button v-for="t in tabs" :key="t.id" role="tab" :aria-selected="status===t.id" class="chip" :class="{on:status===t.id}" @click="setStatus(t.id)">{{t.label}}<b v-if="t.count!==undefined&&t.count!==null">{{t.count}}</b></button></div>
       <div class="works-tools">
         <label class="search"><Icon name="search" :size="15"/><input v-model="query" type="search" placeholder="搜索标题或作品 ID" aria-label="搜索作品"></label>
+        <button class="btn" title="全屏竖滑连续播放本地作品" @click="emit('play',{subscriptionId:item.id,immersive:true,resetMode:true})"><Icon name="play" :size="15"/> 沉浸播放</button>
         <button class="btn" :class="{on:selecting}" @click="selecting=!selecting;selected=new Set()">{{selecting?'退出选择':'选择'}}</button>
         <button class="btn primary" :disabled="batching||!pending" :title="pending?'':'没有待下载的作品'" @click="batch(null)"><Icon name="download" :size="15"/> 下载全部待下载<template v-if="pending">（{{pending}}）</template></button>
       </div>

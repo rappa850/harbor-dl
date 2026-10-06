@@ -72,3 +72,9 @@
 - 把原先约 60 种相近的灰绿色收敛为上表的角色色，10 种圆角收敛为 4 档，字号收敛为 10 档，内边距与间距就近吸附到 4px 网格。原先偏浅的元信息文字（对比度约 2.5:1）统一加深到 `--text-3`，整体观感略有变化。
 - 订阅页原有的局部变量（`--ink`、`--line`、`--muted` 等）已并入这套变量，不再单独定义。
 - 还没有统一的是各页面里并列存在的几套按钮与标签类（`.primary`、`.btn`、`.chip`、`.tag`、`.status`），它们现在共用同一套颜色和圆角，但结构还没合并，后续可以抽成公共组件。
+
+## 播放器
+
+- **快速预览**（播放弹窗）：[Plyr](https://github.com/sampotts/plyr) 封装在 `components/MediaPlayer.vue`，主题变量在 `design/plyr-theme.css`，只引用设计令牌，亮暗自动跟随。图标雪碧图 `design/plyr.svg` 随项目打包，不请求外部 CDN。底层仍是原生 `<video>/<audio>`，断点续播通过它的 `data-asset-id` / `data-subscription-id` 工作。字幕轨在列表返回后才创建播放器（Plyr 创建时读取 `<track>`）。
+- **沉浸播放**：`player/ImmersivePlayer.vue`，全屏竖向 scroll-snap feed，只播放当前条、只挂载前后各一条（图集只在当前条挂载，避免多路音乐）。入口：媒体库筛选栏、订阅作品页工具栏、播放弹窗的"沉浸模式"。快捷键：↑/↓ 或 PageUp/PageDown 切条，空格暂停，←/→ 快退快进 5 秒，M 静音，Esc 退出。浏览器拒绝带声音自动播放时自动静音并给出提示。纯逻辑在 `player/feed.js`，有单元测试。
+- 播放记录始终由 `App.vue` 统一保存，两种播放器共用同一套逻辑。

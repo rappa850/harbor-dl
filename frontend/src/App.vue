@@ -3,6 +3,10 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import SubscriptionPanel from './SubscriptionPanel.vue'
 import LivePanel from './LivePanel.vue'
 import GalleryPlayer from './components/GalleryPlayer.vue'
+import MediaPlayer from './components/MediaPlayer.vue'
+import LibraryView from './library/LibraryView.vue'
+import ImmersivePlayer from './player/ImmersivePlayer.vue'
+import {groupFiles} from './library/library.js'
 import Icon from './components/Icon.vue'
 import {applyTheme,getTheme,nextTheme,themeLabel} from './design/theme.js'
 import {resumeTime,playbackIndex} from './playback-policy.js'
@@ -21,10 +25,11 @@ const proxyInput = ref(''), cookiePlatform = ref('youtube'), cookieInput = ref('
 const tokenItems = ref([]), tokenName = ref(''), tokenDays = ref(''), rawToken = ref(''), tokenAction = ref(null)
 const subtitleTracks = ref([]), playerMetadata = ref(null), playbackMode = ref('order'), autoNext = ref(true)
 let playerLoad = 0
+const immersive=ref(false),feed=ref([]),feedStart=ref(0)
 const playerScope=ref(null),playerList=ref([]),videoProgress=ref({}),mediaElement=ref(null),mediaReady=ref(false)
 let progressDirty=false,progressPoll,progressWrites=Promise.resolve()
 function captureProgress(event){
-  const element=event?.target||mediaElement.value
+  const element=event?.target||mediaElement.value?.element
   if(!playerScope.value||!playing.value?.work_id||!mediaReady.value||!element||element.dataset.assetId!==playing.value.id||element.dataset.subscriptionId!==playerScope.value)return
   if(Number.isFinite(element.currentTime)&&element.currentTime>=0){videoProgress.value[playing.value.work_id]=element.currentTime;progressDirty=true}
 }
@@ -36,7 +41,7 @@ function persistPlayback(){
   progressWrites=progressWrites.then(()=>api(`/playback/record/${scope}`,'PUT',payload)).catch(e=>toast(`播放记录保存失败：${e.message}`))
 }
 function saveCurrent(){captureProgress();persistPlayback()}
-function closePlayer(){saveCurrent();++playerLoad;playing.value=null;playerScope.value=null;playerList.value=[];videoProgress.value={};mediaReady.value=false;progressDirty=false}
+function closePlayer(){immersive.value=false;feed.value=[];saveCurrent();++playerLoad;playing.value=null;playerScope.value=null;playerList.value=[];videoProgress.value={};mediaReady.value=false;progressDirty=false}
 function mediaLoaded(event){
   if(event.target.dataset.assetId!==playing.value?.id||event.target.dataset.subscriptionId!==(playerScope.value||''))return
   if(playerScope.value&&playing.value.work_id){const position=resumeTime(videoProgress.value[playing.value.work_id],event.target.duration);if(position)event.target.currentTime=position}
@@ -44,7 +49,7 @@ function mediaLoaded(event){
 }
 function mediaPaused(event){captureProgress(event);persistPlayback()}
 watch(playbackMode,()=>{if(playerScope.value&&playing.value?.work_id){progressDirty=true;persistPlayback()}})
-async function openSubscriptionPlayer({subscriptionId,videoId,resetMode=false}){
+async function openSubscriptionPlayer({subscriptionId,videoId,resetMode=false,immersive:feedMode=false}){
   saveCurrent();const request=++playerLoad
   try{
     await progressWrites
@@ -59,7 +64,8 @@ async function openSubscriptionPlayer({subscriptionId,videoId,resetMode=false}){
     playing.value=null;mediaReady.value=false
     playerScope.value=subscriptionId;playerList.value=list.items;videoProgress.value={...record?.video_progress,...latestProgress}
     playbackMode.value=resetMode?'order':record?.playback_mode||'order';progressDirty=true
-    openPlayer(list.items[index],true)
+    if(feedMode){feed.value=list.items;feedStart.value=index;immersive.value=true}
+    else openPlayer(list.items[index],true)
   }catch(e){toast(e.message)}
 }
 const platformNames = {youtube:'YouTube',bilibili:'哔哩哔哩',douyin:'抖音',xiaohongshu:'小红书',kuaishou:'快手',tiktok:'TikTok',instagram:'Instagram',x:'X / Twitter',netease:'网易云音乐',universal:'通用解析',sooplive:'SOOP Live',pandatv:'Panda TV'}
@@ -150,20 +156,30 @@ async function refreshTokens(){tokenItems.value=(await api('/auth/tokens')).item
 async function createToken(){busy.value=true;try{const result=await api('/auth/tokens','POST',{name:tokenName.value,expires_in_days:tokenDays.value?Number(tokenDays.value):null});rawToken.value=result.token;tokenName.value='';await refreshTokens()}catch(e){toast(e.message)}finally{busy.value=false}}
 async function editToken(token){busy.value=true;try{await api(`/auth/tokens/${token.id}`,'PATCH',{name:token.name,is_active:token.is_active,expires_at:token.expires_local?new Date(token.expires_local).toISOString():null});await refreshTokens();toast('Token 配置已更新')}catch(e){toast(e.message)}finally{busy.value=false}}
 async function confirmTokenAction(){busy.value=true;try{const action=tokenAction.value;const result=await api(`/auth/tokens/${action.token.id}${action.kind==='regenerate'?'/regenerate':''}`,action.kind==='regenerate'?'POST':'DELETE');rawToken.value=action.kind==='regenerate'?result.token:'';tokenAction.value=null;await refreshTokens()}catch(e){toast(e.message)}finally{busy.value=false}}
-async function openPlayer(file,scoped=false) {
+async function openPlayer(file,scoped=false,quiet=false) {
   saveCurrent()
   if(!scoped){playerScope.value=null;playerList.value=[];videoProgress.value={};progressDirty=false}
   const request=++playerLoad
-  playing.value=file;subtitleTracks.value=[];playerMetadata.value=null;mediaReady.value=false
-  if(!['video','audio'].includes(file.kind))return
+  playing.value=file;subtitleTracks.value=file.kind==='video'?null:[];playerMetadata.value=null;mediaReady.value=false
+  if(quiet||!['video','audio'].includes(file.kind))return
   const current=()=>request===playerLoad && playing.value?.id===file.id
   await Promise.allSettled([
-    api(`/files/${file.id}/subtitles`).then(value=>{if(current())subtitleTracks.value=value.subtitles}),
+    api(`/files/${file.id}/subtitles`).then(value=>{if(current())subtitleTracks.value=value.subtitles}).catch(()=>{}).finally(()=>{if(current()&&subtitleTracks.value===null)subtitleTracks.value=[]}),
     api(`/files/${file.id}/metadata`).then(value=>{if(current())playerMetadata.value=value})
   ])
 }
+const playable=f=>['video','audio','image'].includes(f.kind)
+function libraryFeed(){return groupFiles(files.value).filter(e=>playable(e.primary)).map(e=>({...e.primary,cover:e.cover}))}
+function startLibraryImmersive({items,start=0}){feed.value=items;feedStart.value=start;immersive.value=true}
+function enterImmersive(){
+  const items=playerScope.value?playerList.value:libraryFeed()
+  const at=items.findIndex(f=>f.id===playing.value?.id)
+  feed.value=items;feedStart.value=Math.max(0,at);immersive.value=true
+}
+function immersiveChange(file){openPlayer(file,Boolean(playerScope.value),true)}
+function immersiveEnded(event){captureProgress(event);persistPlayback()}
 function nextMedia(direction=1,random=false) {
-  const list=playerScope.value?playerList.value:files.value.filter(f=>['video','audio','image'].includes(f.kind))
+  const list=playerScope.value?playerList.value:groupFiles(files.value).map(e=>e.primary).filter(playable)
   const current=list.findIndex(f=>f.id===playing.value?.id)
   if(!list.length)return
   let index=(Math.max(0,current)+direction+list.length)%list.length
@@ -215,7 +231,7 @@ onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);c
         <section class="panel"><div class="toolbar"><div class="tabs"><button @click="filter=''" :class="{active:!filter}">全部</button><button @click="filter='active'" :class="{active:filter==='active'}">进行中</button><button v-for="(label,key) in labels" :key="key" @click="filter=key" :class="{active:filter===key}">{{label}}</button></div><input v-model="query" class="search" placeholder="搜索标题、文件名或作者…" aria-label="搜索任务"></div><div class="task-filters"><label>平台<select v-model="taskPlatform"><option value="">全部平台</option><option v-for="(name,key) in platformNames" :key="key" :value="key">{{name}}</option></select></label><label class="download-option"><input type="checkbox" v-model="manualOnly">仅手动任务</label><label class="download-option"><input type="checkbox" v-model="orphanOnly">仅文件缺失</label><span>共 {{taskTotal}} 项</span></div><div v-if="!visibleTasks.length" class="empty"><span>↓</span><h3>{{tasks.length?'没有符合条件的任务':'还没有下载任务'}}</h3><p>{{tasks.length?'试试其他状态或关键词。':'点击新建下载，保存你的第一份媒体。'}}</p></div><article v-for="t in visibleTasks" :key="t.id" class="task-row"><span class="file-icon">↓</span><div class="task-info"><button class="task-title" @click="detail(t)">{{t.title}}</button><p class="url">{{t.url}}</p><div v-if="t.status==='DOWNLOADING'" class="progress"><span :style="{width:t.progress+'%'}"></span></div><p class="task-meta">{{date(t.created_at)}} <template v-if="t.status==='DOWNLOADING'"> · {{t.total?t.progress.toFixed(1)+'%':'正在获取媒体'}} · {{size(t.downloaded)}}<template v-if="t.total"> / {{size(t.total)}}</template> · {{t.speed||'准备中'}}</template></p><p v-if="t.error" class="task-error">{{t.error}}</p></div><div class="task-actions"><span :class="['status',t.status]">{{labels[t.status]}}</span><div><button v-if="['PENDING','DOWNLOADING','PROCESSING'].includes(t.status)" @click="action(t,'cancel')">取消</button><button v-if="['ERROR','CANCELLED'].includes(t.status)" @click="action(t,'retry')">重试</button><a v-if="t.status==='COMPLETED'" :href="`/api/files/${t.id}/download`">保存</a><button v-if="!['PENDING','DOWNLOADING','PROCESSING'].includes(t.status)" class="danger-text" @click="deleteMedia=true;deleteRelated=true;deleting=t">删除</button></div></div></article><div class="task-pagination"><button :disabled="taskPage<=1" @click="taskPage--">上一页</button><span>第 {{taskPage}} / {{taskPages}} 页</span><button :disabled="taskPage>=taskPages" @click="taskPage++">下一页</button></div></section><p class="hint">每页 24 项，筛选和搜索覆盖全部任务。</p>
       </template>
 
-      <template v-if="page==='files'"><div class="library-heading"><p>已收藏 {{files.length}} 个媒体文件 · {{size(files.reduce((a,f)=>a+f.size,0))}}</p><button class="text-button" @click="refresh">↻ 刷新</button></div><section v-if="!files.length" class="panel empty"><span>▦</span><h3>媒体库还在等你的第一份收藏</h3><p>下载完成后，文件会自动出现在这里。</p><button class="primary" @click="openDownload">新建下载</button></section><section class="file-grid"><article v-for="f in files" :key="f.id" class="media-card"><button class="media-cover" @click="openPlayer(f)" :aria-label="`播放 ${f.title}`"><img v-if="f.cover" :src="f.cover" alt="" loading="lazy" @error="$event.target.remove()"><span class="extension">{{f.extension.replace('.','').toUpperCase()}}</span><span class="play-button">▶</span><span class="media-wave"></span></button><div class="media-info"><h3 :title="f.title">{{f.title}}</h3><p>{{size(f.size)}} · {{date(f.created_at)}}</p><div><button class="text-button" @click="openPlayer(f)">播放</button><a :href="`/api/files/${f.id}/download`">保存文件 ↓</a></div></div></article></section></template>
+      <template v-if="page==='files'"><LibraryView :files="files" :size="size" :date="date" @play="openPlayer($event)" @immersive="startLibraryImmersive" @refresh="refresh" @create="openDownload"/></template>
 
       <div v-if="page==='settings'" class="settings-grid"><section class="panel settings"><h2>下载设置</h2><p>调整任务处理方式，设置会在重启后保留。</p><form @submit.prevent="saveSettings"><label>同时下载的任务数<input type="number" v-model.number="settings.concurrency" min="1" max="8" required><small>1–8 项，用于控制带宽与系统负载。</small></label><label>同时同步的订阅数<input type="number" v-model.number="settings.sync_concurrency" min="1" max="3" required><small>1–3 个，默认 1。全量同步与检查更新共用这个上限，多出的订阅会排队；数值越小，对媒体平台的请求越少、越不容易触发风控。</small></label><button class="primary" :disabled="busy">保存设置</button></form></section><section class="panel settings"><h2>运行环境</h2><div class="setting-row"><span>应用版本</span><strong>{{settings.version}}</strong></div><div class="setting-row"><span>FFmpeg</span><strong :class="{warning:!settings.ffmpeg_available}">{{settings.ffmpeg_available?'已安装':'未检测到'}}</strong></div><p v-if="!settings.ffmpeg_available" class="hint">部分媒体需要合并音视频轨道。部署时安装 FFmpeg 可支持这类下载。</p><div class="setting-row"><span>软件许可证</span><strong>MIT · 所有业务功能开放</strong></div></section><section class="panel settings"><h2>网络代理</h2><p>解析与下载共用代理配置。绕过名单支持域名、前导点和 * 通配符，逗号分隔。</p><form @submit.prevent="saveProxy"><label class="download-option"><input type="checkbox" v-model="network.enabled">启用全局代理</label><label>代理地址<input type="password" v-model="proxyInput" autocomplete="off" placeholder="http://host:port 或 socks5://host:port"><small>{{network.has_proxy?'当前 '+network.proxy_display+'；留空保留已保存地址':'尚未配置代理地址'}}</small></label><label>绕过代理<input v-model="network.no_proxy" maxlength="4096"></label><button class="primary" :disabled="busy">保存代理</button></form></section><section class="panel settings"><h2>平台 Cookie</h2><p>导入 Netscape Cookie 文件内容或单行 Cookie 请求头。保存后用于该平台的解析与下载。</p><form @submit.prevent="saveCookie"><label>平台<select v-model="cookiePlatform" @change="cookieInput='' "><option v-for="(name,key) in platformNames" :key="key" :value="key">{{name}}</option></select></label><p>{{network.cookies[cookiePlatform]?.exists?'已配置 · '+date(network.cookies[cookiePlatform].updated_at):'未配置'}} · 保存状态不代表平台登录仍然有效</p><label>Cookie 内容<textarea v-model="cookieInput" rows="6" maxlength="524288" autocomplete="off" spellcheck="false" placeholder="粘贴 Cookie 内容"></textarea></label><div class="download-buttons"><button class="primary" :disabled="busy || !cookieInput.trim()">保存 Cookie</button><button type="button" :disabled="busy || !network.cookies[cookiePlatform]?.exists" @click="clearCookie">清空 Cookie</button></div></form></section><section class="panel settings"><h2>API Token</h2><p>为脚本或外部应用创建独立令牌。调用时使用 X-API-Token 请求头或 Authorization: Bearer。</p><form @submit.prevent="createToken"><label>用途名称<input v-model="tokenName" maxlength="128" required></label><label>有效天数<input type="number" v-model="tokenDays" min="1" step="1" placeholder="留空为不过期"></label><button class="primary" :disabled="busy">创建 Token</button></form><div v-if="rawToken" class="token-reveal"><p>请复制保存：完整 Token 只在这次创建或重置时显示。</p><label>完整 Token<textarea :value="rawToken" readonly rows="3" spellcheck="false" aria-label="完整 API Token"></textarea></label><button @click="rawToken=''">我已保存，关闭显示</button></div><article v-for="token in tokenItems" :key="token.id" class="token-item"><label>名称<input v-model="token.name" maxlength="128" required></label><p>末尾 {{token.token_suffix}} · {{token.expires_at ? '到期 '+date(token.expires_at) : '不过期'}} · 最近使用 {{date(token.last_used_at)}}</p><label>到期时间（清空为不过期）<input type="datetime-local" step="1" v-model="token.expires_local"></label><label class="download-option"><input type="checkbox" v-model="token.is_active">启用</label><div class="download-buttons"><button :disabled="busy" @click="editToken(token)">保存编辑</button><button :disabled="busy" @click="tokenAction={kind:'regenerate',token}">重新生成</button><button :disabled="busy" class="danger-text" @click="tokenAction={kind:'delete',token}">删除</button></div></article><p v-if="!tokenItems.length">尚未创建 Token。</p></section></div>
 
@@ -241,12 +257,13 @@ onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);c
     </form>
   </section></div>
   <div v-if="selectedTask && account" class="overlay" @click.self="selectedTask=null"><section class="modal detail" role="dialog" aria-modal="true" aria-labelledby="detail-title"><button class="close" @click="selectedTask=null" aria-label="关闭">×</button><h2 id="detail-title">任务详情</h2><h3>{{selectedTask.title}}</h3><p class="url">{{selectedTask.url}}</p><span :class="['status',selectedTask.status]">{{labels[selectedTask.status]}}</span><p v-if="selectedTask.error" class="error">{{selectedTask.error}}</p><h3>任务记录</h3><ol class="events"><li v-for="(e,i) in selectedTask.events" :key="i"><small>{{date(e.created_at)}}</small><p>{{e.message}}</p></li></ol></section></div>
-  <div v-if="playing && account" class="overlay" @click.self="closePlayer"><section class="modal player" role="dialog" aria-modal="true" aria-labelledby="player-title">
+  <ImmersivePlayer v-if="immersive&&feed.length&&account" :items="feed" :start="feedStart" :scope="playerScope||''" :mode="playbackMode" :auto-next="autoNext" :api="api" @change="immersiveChange" @close="closePlayer" @loadedmetadata="mediaLoaded" @timeupdate="captureProgress" @pause="mediaPaused" @ended="immersiveEnded"/>
+  <div v-if="playing && account && !immersive" class="overlay" @click.self="closePlayer"><section class="modal player" role="dialog" aria-modal="true" aria-labelledby="player-title">
     <button class="close" @click="closePlayer" aria-label="关闭">×</button><h2 id="player-title">{{playing.title}}</h2>
-    <audio v-if="playing.kind==='audio'" ref="mediaElement" :key="`${playerScope||'manual'}:${playing.id}`" :data-asset-id="playing.id" :data-subscription-id="playerScope||''" @loadedmetadata="mediaLoaded" @timeupdate="captureProgress" @pause="mediaPaused" @ended="mediaEnded" controls autoplay :src="`/api/files/${playing.id}/stream`"></audio>
+    <MediaPlayer v-if="playing.kind==='audio'" ref="mediaElement" :key="`${playerScope||'manual'}:${playing.id}`" kind="audio" :asset-id="playing.id" :scope="playerScope||''" :tracks="[]" :src="`/api/files/${playing.id}/stream`" @loadedmetadata="mediaLoaded" @timeupdate="captureProgress" @pause="mediaPaused" @ended="mediaEnded"/>
     <GalleryPlayer v-else-if="playing.kind==='image'" :key="`${playerScope||'manual'}:${playing.id}`" :asset-id="playing.id" :title="playing.title" :api="api" :chain="autoNext&&Boolean(playerScope)&&playbackMode!=='single'" @finished="galleryEnded"/>
-    <video v-else ref="mediaElement" :key="`${playerScope||'manual'}:${playing.id}`" :data-asset-id="playing.id" :data-subscription-id="playerScope||''" @loadedmetadata="mediaLoaded" @timeupdate="captureProgress" @pause="mediaPaused" @ended="mediaEnded" controls autoplay :src="`/api/files/${playing.id}/stream`" @error="toast('浏览器无法播放此格式，可以保存文件后使用本地播放器')"><track v-for="track in subtitleTracks" :key="track.id" kind="subtitles" :src="track.path" :label="track.label" :srclang="track.language.split('.')[0]" :default="track.is_default"></video>
-    <div class="player-controls"><button @click="nextMedia(-1)">上一项</button><select v-model="playbackMode" aria-label="播放模式"><option value="order">顺序播放</option><option value="random">随机播放</option><option value="single">单曲循环</option></select><button @click="nextMedia(1)">下一项</button><label class="download-option"><input type="checkbox" v-model="autoNext">播放结束自动继续</label></div>
+    <MediaPlayer v-else ref="mediaElement" :key="`${playerScope||'manual'}:${playing.id}`" kind="video" :asset-id="playing.id" :scope="playerScope||''" :tracks="subtitleTracks" :src="`/api/files/${playing.id}/stream`" @loadedmetadata="mediaLoaded" @timeupdate="captureProgress" @pause="mediaPaused" @ended="mediaEnded" @error="toast('浏览器无法播放此格式，可以保存文件后使用本地播放器')"/>
+    <div class="player-controls"><button @click="nextMedia(-1)">上一项</button><select v-model="playbackMode" aria-label="播放模式"><option value="order">顺序播放</option><option value="random">随机播放</option><option value="single">单曲循环</option></select><button @click="nextMedia(1)">下一项</button><button @click="enterImmersive">沉浸模式</button><label class="download-option"><input type="checkbox" v-model="autoNext">播放结束自动继续</label></div>
     <p v-if="playerMetadata?.success" class="hint">{{playerMetadata.width && playerMetadata.height ? playerMetadata.width+' × '+playerMetadata.height+' · ' : ''}}{{playerMetadata.duration ? Math.round(playerMetadata.duration)+' 秒' : ''}}</p><p v-if="playerMetadata && !playerMetadata.success" class="hint">{{playerMetadata.reason}}</p><p class="hint">浏览器支持的格式可直接播放，其他格式可保存到本地。</p><a class="primary download-link" :href="`/api/files/${playing.id}/download`">保存到本地 ↓</a>
   </section></div>
   <div v-if="deleting && account" class="overlay" @click.self="deleting=null"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">删除这份下载？</h2><p>删除任务记录时，可以选择保留媒体文件。删除文件无法撤销。</p><p class="delete-name">{{deleting.title}}</p><label class="download-option"><input type="checkbox" v-model="deleteMedia">同时删除媒体文件</label><label v-if="deleteMedia" class="download-option"><input type="checkbox" v-model="deleteRelated">删除字幕、缩略图等关联文件</label><div class="modal-actions"><button @click="deleting=null">保留</button><button class="danger" :disabled="busy" @click="remove">确认删除</button></div></section></div>

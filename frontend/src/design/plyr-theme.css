@@ -1,0 +1,46 @@
+/* Plyr, dressed in the Harbor tokens. Only variables are overridden, so light and dark follow the theme. */
+@import 'plyr/dist/plyr.css';
+
+.plyr{
+  --plyr-color-main:var(--brand);
+  --plyr-font-family:var(--font-sans);
+  --plyr-font-size-base:var(--fs-13);
+  --plyr-font-size-small:var(--fs-12);
+  --plyr-control-radius:var(--r-md);
+  --plyr-control-icon-size:16px;
+  --plyr-control-spacing:10px;
+  --plyr-video-background:var(--surface-ink);
+  --plyr-video-controls-background:linear-gradient(transparent,rgba(5,12,9,.78));
+  --plyr-video-control-color:var(--on-ink);
+  --plyr-video-control-color-hover:#fff;
+  --plyr-video-control-background-hover:var(--brand);
+  --plyr-audio-controls-background:var(--surface-2);
+  --plyr-audio-control-color:var(--text-2);
+  --plyr-audio-control-color-hover:var(--on-brand);
+  --plyr-audio-control-background-hover:var(--brand);
+  --plyr-menu-background:var(--surface);
+  --plyr-menu-color:var(--text);
+  --plyr-menu-radius:var(--r-lg);
+  --plyr-menu-border-color:var(--border);
+  --plyr-menu-shadow:var(--shadow-md);
+  --plyr-tooltip-background:var(--surface);
+  --plyr-tooltip-color:var(--text);
+  --plyr-range-thumb-background:#fff;
+  --plyr-range-track-height:5px;
+  --plyr-badge-background:var(--brand);
+  --plyr-captions-background:rgba(5,12,9,.72);
+  --plyr-captions-text-color:#fff;
+  --plyr-font-size-captions-base:var(--fs-16);
+  border-radius:var(--r-md);
+}
+.plyr--audio .plyr__controls{border:1px solid var(--border);border-radius:var(--r-md)}
+.plyr--full-ui input[type=range]{color:var(--brand)}
+
+/* Player dialog: wide enough for a video, narrower than a page */
+.modal.player{width:min(760px,100%)}
+.player .media-player{margin-top:var(--sp-16)}
+
+/* A dialog owns the wheel: the page behind it does not scroll */
+html:has(.overlay){overflow:hidden}
+.overlay{overscroll-behavior:contain}
+.modal{overscroll-behavior:contain}

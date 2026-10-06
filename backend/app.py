@@ -5,19 +5,22 @@ import os
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
-from .covers import CoverCache
+from .covers import CoverCache, key_for
+from .imagesize import image_ratio
 from .downloads import DownloadManager, now
 from .store import Store
 from .media import MediaInspector, platform_for, share_url
@@ -426,7 +429,11 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         items = manager.assets.items(attachments)
         urls = {row['id']: row['url'] for row in store.all('SELECT id,url FROM tasks')}
         for item in items:
-            item['cover'] = covers.local(urls.get(item['task_id'])) if item['task_id'] else None
+            work_url = urls.get(item['task_id']) if item['task_id'] else None
+            item['cover'] = covers.local(work_url)
+            # width / height of what the library shows for this file: the cached cover, else the picture itself
+            shown = covers.find(key_for(work_url)) if item['cover'] else (manager.assets.root / item['path'] if item['kind'] == 'image' else None)
+            item['ratio'] = image_ratio(shown) if shown else None
         return {'items': items}
 
     @app.get('/api/covers/{key}')
@@ -472,6 +479,35 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             raise HTTPException(422, '该文件不是图片')
         index = next((i for i, item in enumerate(found['image']) if item['id'] == asset['id']), 0)
         return {'images': found['image'], 'audio': found['audio'][0] if found['audio'] else None, 'index': index}
+
+    @app.get('/api/files/{asset_id}/archive')
+    def archive(asset_id: str, account=Depends(user)):
+        """Every file of the post this file belongs to, as one zip (pictures, motion pictures, music)."""
+        asset = manager.assets.get(asset_id)
+        if not asset:
+            raise HTTPException(404, '媒体文件不存在')
+        rows = store.all('SELECT path FROM media_assets WHERE task_id=? AND kind!=? ORDER BY path', (asset['task_id'], 'attachment')) if asset['task_id'] else [asset]
+        paths = []
+        for row in rows:
+            try:
+                paths.append(manager.assets.path(row['path']))
+            except ValueError:
+                continue
+        if not paths:
+            raise HTTPException(404, '媒体文件不存在')
+        buffer = tempfile.SpooledTemporaryFile(max_size=32 * 1024 * 1024)
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as bundle:
+            for path in paths:
+                bundle.write(path, path.name)
+        size = buffer.tell()
+        buffer.seek(0)
+        name = quote(f"{Path(asset['title']).stem[:60] or 'post'}.zip")
+        def chunks():
+            with buffer:
+                while data := buffer.read(1 << 20):
+                    yield data
+        return StreamingResponse(chunks(), media_type='application/zip',
+                                 headers={'Content-Length': str(size), 'Content-Disposition': f"attachment; filename*=UTF-8''{name}"})
 
     @app.get('/api/files/{task_id}/download')
     def download(task_id: str, account=Depends(user)):
