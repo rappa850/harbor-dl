@@ -44,11 +44,16 @@ jobs:
           $F -hide_banner -loglevel error -y -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:a mp2 -f mpegts audio.ts; echo "make audio-only sample: $?"
           $F -hide_banner -loglevel error -y -f lavfi -i testsrc=size=64x48:rate=5 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:v mpeg2video -c:a mp2 -f mpegts av.ts; echo "make audio+video sample: $?"
           run() { name="$1"; shift; rm -f out.ts; "$@" 2>err.txt; echo "$name => exit $?"; head -c 300 err.txt; }
-          run "current args, audio-only" $F -hide_banner -loglevel error -n -i audio.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts
-          run "no -map, audio-only      " $F -hide_banner -loglevel error -n -i audio.ts -c copy -f mpegts out.ts
-          run "-map 0:a? only, audio    " $F -hide_banner -loglevel error -n -i audio.ts -map '0:a?' -c copy -f mpegts out.ts
-          run "current args, audio+video" $F -hide_banner -loglevel error -n -i av.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts
-          run "-map 0 , audio-only      " $F -hide_banner -loglevel error -n -i audio.ts -map 0 -c copy -f mpegts out.ts
+          run "A  -n  copy->mpegts      " $F -hide_banner -loglevel error -n -i audio.ts -c copy -f mpegts out.ts
+          run "B  -y  copy->mpegts      " $F -hide_banner -loglevel error -y -i audio.ts -c copy -f mpegts out.ts
+          run "C  -y -nostdin           " $F -hide_banner -loglevel error -y -nostdin -i audio.ts -c copy -f mpegts out.ts
+          run "D  -y -> null muxer      " $F -hide_banner -loglevel error -y -i audio.ts -f null -
+          run "E  -y copy->matroska     " $F -hide_banner -loglevel error -y -i audio.ts -c copy -f matroska out.mkv
+          run "F  -y decode->wav        " $F -hide_banner -loglevel error -y -i audio.ts out.wav
+          run "G  -y lavfi->copy mpegts " $F -hide_banner -loglevel error -y -f lavfi -i sine=frequency=440 -t 1 -c:a mp2 -f mpegts out2.ts
+          run "H  -y input is a pipe    " bash -c "cat audio.ts | $F -hide_banner -loglevel error -y -i - -c copy -f mpegts out3.ts"
+          run "I  -y bare (no -hide...) " $F -y -i audio.ts -c copy -f mpegts out4.ts
+          echo "--- file info"; ls -l audio.ts av.ts; file audio.ts 2>/dev/null | head -1; echo "ffmpeg binary:"; file "$F" | cut -c1-160; echo "--- ldd"; ldd "$F" 2>&1 | head -3
           echo "system ffmpeg:"; ffmpeg -version | head -1
           rm -f out.ts; ffmpeg -hide_banner -loglevel error -n -i audio.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts; echo "system ffmpeg, current args, audio-only => exit $?"
       - run: python -m unittest discover -s tests
