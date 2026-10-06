@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
+from .covers import CoverCache
 from .downloads import DownloadManager, now
 from .store import Store
 from .media import MediaInspector, platform_for, share_url
@@ -74,6 +75,7 @@ class TaskInput(BaseModel):
     format_id: str = Field(default='bestvideo+bestaudio/best', min_length=1, max_length=200)
     subtitles: bool = True
     thumbnail: bool = True
+    cover_url: str = Field(default='', max_length=4096)
 
     @field_validator('url')
     @classmethod
@@ -111,6 +113,7 @@ class PlaybackInput(BaseModel):
 
 class SettingsInput(BaseModel):
     concurrency: int = Field(ge=1, le=8)
+    sync_concurrency: int | None = Field(default=None, ge=1, le=3)
 
 
 class TokenCreate(BaseModel):
@@ -158,7 +161,8 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     live_subscriptions.monitor_status=live_monitor.status
     registry = platform_registry or default_registry()
     profiles = ProfileResolver(inspector,network,registry)
-    catalog = SubscriptionCatalog(store,subscriptions,inspector,network,manager,registry)
+    covers = CoverCache(data / 'covers')
+    catalog = SubscriptionCatalog(store,subscriptions,inspector,network,manager,registry,covers)
     scheduler = SubscriptionScheduler(subscriptions,catalog,**(scheduler_options or {}))
     for adapter in set(registry.adapters.values()):
         for platform in adapter.platforms:manager.resolvers[platform]=adapter.download_target
@@ -168,6 +172,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     @asynccontextmanager
     async def lifespan(app):
         await manager.start()
+        catalog.backfill_covers()
         try:
             await live_recording.restore()
             await live_monitor.start()
@@ -323,8 +328,11 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
 
     @app.post('/api/tasks', status_code=201)
     async def add_task(payload: TaskInput, account=Depends(user)):
-        return manager.create(payload.url, payload.title, payload.format_id, payload.subtitles,
+        task = manager.create(payload.url, payload.title, payload.format_id, payload.subtitles,
                               payload.thumbnail, platform_for(payload.url), payload.author)
+        if payload.cover_url:
+            covers.fetch_later(payload.url, payload.cover_url, network.for_url(payload.cover_url))
+        return task
 
     @app.post('/api/media/parse')
     async def parse_media(payload: ParseInput, account=Depends(user)):
@@ -415,7 +423,18 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
 
     @app.get('/api/files')
     def files(attachments: bool = False, account=Depends(user)):
-        return {'items': manager.assets.items(attachments)}
+        items = manager.assets.items(attachments)
+        urls = {row['id']: row['url'] for row in store.all('SELECT id,url FROM tasks')}
+        for item in items:
+            item['cover'] = covers.local(urls.get(item['task_id'])) if item['task_id'] else None
+        return {'items': items}
+
+    @app.get('/api/covers/{key}')
+    def cover(key: str, account=Depends(user)):
+        path = covers.find(key)
+        if not path:
+            raise HTTPException(404, '封面不存在')
+        return FileResponse(path, headers={'Cache-Control': 'private, max-age=604800'})
 
     def asset_path(asset_id):
         asset = manager.assets.get(asset_id)
@@ -496,11 +515,16 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     @app.get('/api/settings')
     def settings(account=Depends(user)):
         return {'concurrency': int(store.one('SELECT value FROM settings WHERE key="concurrency"')['value']),
+                'sync_concurrency': catalog.sync_limit(),
                 'ffmpeg_available': shutil.which('ffmpeg') is not None, 'version': app.version}
 
     @app.get('/api/subscriptions')
     def subscription_list(account=Depends(user)):
         return {'items':[catalog.decorate(item) for item in subscriptions.list()]}
+
+    @app.get('/api/subscriptions/{subscription_id}/sync-progress')
+    def sync_progress(subscription_id: UUID,account=Depends(user)):
+        return {'progress': catalog.sync_progress(subscription_id)}
 
     @app.post('/api/subscriptions/{subscription_id}/sync')
     async def sync_subscription(subscription_id: UUID,account=Depends(user)):
@@ -717,7 +741,11 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     async def update_settings(payload: SettingsInput, account=Depends(user)):
         with store.connect() as db:
             db.execute('UPDATE settings SET value=? WHERE key="concurrency"', (str(payload.concurrency),))
+            if payload.sync_concurrency is not None:
+                db.execute('INSERT INTO settings(key,value) VALUES ("sync_concurrency",?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           (str(payload.sync_concurrency),))
         manager.wake.set()
+        await catalog.gate.poke()
         return settings(account)
 
     @app.get('/api/system/health')

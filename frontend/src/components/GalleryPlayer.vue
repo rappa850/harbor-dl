@@ -5,13 +5,43 @@ import Icon from './Icon.vue'
 const props=defineProps({assetId:{type:String,required:true},title:String,api:Function,chain:Boolean,interval:{type:Number,default:4000}})
 const emit=defineEmits(['finished'])
 const info=ref(null),index=ref(0),error=ref(''),playing=ref(true),musicOn=ref(true),blocked=ref(false),musicPlaying=ref(false),volume=ref(0.7)
-const audio=ref(null),stage=ref(null)
+const audio=ref(null),stage=ref(null),ratio=ref(1.5)
+// The stage keeps one shape for the whole post so the dialog never jumps between pictures of different proportions.
+// Its shape is the dominant picture ratio of the post, limited to a range that still fits on screen;
+// pictures with another ratio are letterboxed inside it. The stage height leaves room (--chrome) for the dialog's title,
+// thumbnails, controls and save button so the dialog itself fits the window without its own scrollbar.
+const MIN_RATIO=0.56,MAX_RATIO=1.78,GRACE=1200
+function measure(id){
+  return new Promise(resolve=>{
+    const img=new Image()
+    img.onload=()=>resolve(img.naturalWidth&&img.naturalHeight?img.naturalWidth/img.naturalHeight:null)
+    img.onerror=()=>resolve(null)
+    img.src=src(id)
+  })
+}
+function dominantRatio(values){
+  const found=values.filter(v=>v)
+  if(!found.length)return 1.5
+  const buckets=new Map()
+  for(const v of found){const key=Math.round(v*20)/20;const b=buckets.get(key)||{n:0,sum:0};b.n++;b.sum+=v;buckets.set(key,b)}
+  let best=null
+  for(const b of buckets.values())if(!best||b.n>best.n)best=b           // ties keep the earliest bucket, i.e. the first picture's
+  return Math.min(MAX_RATIO,Math.max(MIN_RATIO,best.sum/best.n))
+}
+async function detectRatio(images){
+  // The first picture is always awaited; the others only for a short grace period, so a large post opens quickly.
+  const sizes=[]
+  const all=images.map((im,i)=>measure(im.id).then(v=>{sizes[i]=v}))
+  await all[0]
+  await Promise.race([Promise.all(all),new Promise(r=>setTimeout(r,GRACE))])
+  ratio.value=dominantRatio(sizes)
+}
 let timer=null
 const count=computed(()=>info.value?.images.length||0)
 const current=computed(()=>info.value?.images[index.value])
 const src=(id)=>`/api/files/${id}/stream`
 async function load(){
-  try{info.value=await props.api(`/files/${props.assetId}/gallery`);index.value=info.value.index||0;error.value=''}
+  try{const data=await props.api(`/files/${props.assetId}/gallery`);await detectRatio(data.images);info.value=data;index.value=data.index||0;error.value=''}
   catch(e){error.value=e.message;return}
   await nextTick();startMusic();schedule();stage.value?.focus()
 }
@@ -48,7 +78,7 @@ onUnmounted(()=>{clearTimeout(timer);audio.value?.pause()})
   <div class="gallery" ref="stage" tabindex="0" @keydown="key" aria-label="图集播放器">
     <p v-if="error" class="inline-error" role="alert">{{error}}</p>
     <template v-else-if="info">
-      <div class="gallery-stage">
+      <div class="gallery-stage" :style="{'--ratio':ratio}">
         <img :key="current.id" class="gallery-image" :src="src(current.id)" :alt="`${title||'图集'} 第 ${index+1} 张`">
         <button v-if="count>1" class="gallery-nav prev" aria-label="上一张" @click="go(index-1)"><Icon name="chevron" :size="22"/></button>
         <button v-if="count>1" class="gallery-nav next" aria-label="下一张" @click="go(index+1)"><Icon name="chevron" :size="22"/></button>
@@ -70,20 +100,20 @@ onUnmounted(()=>{clearTimeout(timer);audio.value?.pause()})
   </div>
 </template>
 <style scoped>
-.gallery{display:flex;flex-direction:column;gap:12px;outline:none}
-.gallery-stage{position:relative;background:#111c17;border-radius:12px;height:min(62vh,640px);display:grid;place-items:center;overflow:hidden}
-.gallery-image{max-width:100%;max-height:100%;object-fit:contain;animation:gfade .25s ease}@keyframes gfade{from{opacity:0}to{opacity:1}}
-.gallery-nav{position:absolute;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:0;background:rgba(255,255,255,.88);color:#253c34;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}
-.gallery-nav:hover{background:#fff}.gallery-nav.prev{left:12px}.gallery-nav.prev svg{transform:rotate(180deg)}.gallery-nav.next{right:12px}
-.gallery-count{position:absolute;top:12px;right:12px;background:rgba(17,28,23,.7);color:#fff;font-size:12px;border-radius:999px;padding:4px 11px}
-.gallery-timer{position:absolute;left:0;bottom:0;height:3px;background:#59b88a;width:100%;transform-origin:left;animation:gtimer linear forwards}@keyframes gtimer{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-.gallery-thumbs{display:flex;gap:8px;overflow-x:auto;padding:2px}
-.gallery-thumbs button{flex:0 0 auto;width:62px;height:62px;border-radius:8px;border:2px solid transparent;padding:0;background:#e6ebe2;overflow:hidden;cursor:pointer;opacity:.7}
-.gallery-thumbs button.on{border-color:#256349;opacity:1}.gallery-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
-.gallery-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.gbtn{display:inline-flex;align-items:center;gap:7px;border:1px solid #d5ddd1;background:#fff;color:#253c34;border-radius:9px;padding:8px 13px;font-size:13px;cursor:pointer}
-.gbtn:hover{background:#f4f7f1}.gbtn.alert{background:#fbf3de;border-color:#e5cf93;color:#7d5a14}
-.gvol{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:7px;margin:0!important;color:#78877d}.gvol input[type=range]{width:96px;padding:0;border:0;accent-color:#256349}
-.gmuted{font-size:12px;color:#78877d}.inline-error{background:#fcefea;color:#9a4630;border-radius:9px;padding:10px 13px;font-size:13px;margin:0}
+.gallery{display:flex;flex-direction:column;gap:var(--sp-12);outline:none}
+.gallery-stage{--chrome:424px;--stage-h:clamp(220px,calc(88vh - var(--chrome)),720px);position:relative;background:var(--surface-ink);border-radius:var(--r-lg);width:min(100%,calc(var(--stage-h) * var(--ratio,1.5)));aspect-ratio:var(--ratio,1.5);margin-inline:auto;overflow:hidden}
+.gallery-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;animation:gfade .25s ease}@keyframes gfade{from{opacity:0}to{opacity:1}}
+.gallery-nav{position:absolute;top:50%;transform:translateY(-50%);width:42px;height:42px;border-radius:50%;border:0;background:var(--overlay-soft);color:var(--text);display:grid;place-items:center;cursor:pointer;box-shadow:var(--shadow-md)}
+.gallery-nav:hover{background:var(--surface)}.gallery-nav.prev{left:12px}.gallery-nav.prev svg{transform:rotate(180deg)}.gallery-nav.next{right:12px}
+.gallery-count{position:absolute;top:12px;right:12px;background:var(--overlay);color:var(--on-brand);font-size:var(--fs-12);border-radius:var(--r-pill);padding:var(--sp-4) var(--sp-12)}
+.gallery-timer{position:absolute;left:0;bottom:0;height:3px;background:var(--success);width:100%;transform-origin:left;animation:gtimer linear forwards}@keyframes gtimer{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.gallery-thumbs{display:flex;gap:var(--sp-8);overflow-x:auto;padding:var(--sp-2)}
+.gallery-thumbs button{flex:0 0 auto;width:62px;height:62px;border-radius:var(--r-md);border:2px solid transparent;padding:0;background:var(--surface-3);overflow:hidden;cursor:pointer;opacity:.7}
+.gallery-thumbs button.on{border-color:var(--brand);opacity:1}.gallery-thumbs img{width:100%;height:100%;object-fit:cover;display:block}
+.gallery-bar{display:flex;align-items:center;gap:var(--sp-12);flex-wrap:wrap}
+.gbtn{display:inline-flex;align-items:center;gap:var(--sp-8);border:1px solid var(--border-strong);background:var(--surface);color:var(--text);border-radius:var(--r-md);padding:var(--sp-8) var(--sp-12);font-size:var(--fs-13);cursor:pointer}
+.gbtn:hover{background:var(--bg)}.gbtn.alert{background:var(--warning-soft);border-color:var(--warning-border);color:var(--warning-text)}
+.gvol{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:var(--sp-8);margin:0!important;color:var(--text-3)}.gvol input[type=range]{width:96px;padding:0;border:0;accent-color:var(--brand)}
+.gmuted{font-size:var(--fs-12);color:var(--text-3)}.inline-error{background:var(--danger-soft);color:var(--danger-text);border-radius:var(--r-md);padding:var(--sp-12) var(--sp-12);font-size:var(--fs-13);margin:0}
 @media (prefers-reduced-motion:reduce){.gallery-image,.gallery-timer{animation:none}}
 </style>

@@ -10,7 +10,7 @@ const paths={
   user:'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 20a8 8 0 0 1 16 0',close:'M6 6l12 12M18 6L6 18',upload:'M12 15V4m0 0L8 8m4-4l4 4M5 19h14',
   film:'M4 5h16v14H4zM8 5v14M16 5v14M4 9h4M16 9h4M4 15h4M16 15h4',music:'M9 18V6l11-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm11-2a3 3 0 1 1-3-3 3 3 0 0 1 3 3z',
   clock:'M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',key:'M14 10a4 4 0 1 0-3.5 4L12 16h2v2h2v2h3v-3l-5-5',folder:'M3 6h6l2 2h10v11H3z',
-  chevron:'M9 6l6 6-6 6',stop:'M7 7h10v10H7z',external:'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6'
+  chevron:'M9 6l6 6-6 6',sun:'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6L7 7m10 10l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4',moon:'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z',monitor:'M3 5h18v11H3zM8 20h8M12 16v4',stop:'M7 7h10v10H7z',external:'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6'
 }
 </script>
 <template><svg :width="size" :height="size" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name]||paths.alert"/></svg></template>

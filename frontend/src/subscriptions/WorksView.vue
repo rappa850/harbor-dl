@@ -97,7 +97,7 @@ async function runCleanup(){
       <div class="grid" :class="{busy:loading}">
         <article v-for="v in videos.videos" :key="v.id" class="work" :class="{picked:selected.has(v.id)}" @click.stop="selecting&&toggle(v)">
           <div class="cover">
-            <img v-if="v.cover_url" :src="v.cover_url" referrerpolicy="no-referrer" loading="lazy" alt="" @error="$event.target.remove()">
+            <img v-if="v.cover_local||v.cover_url" :src="v.cover_local||v.cover_url" referrerpolicy="no-referrer" loading="lazy" alt="" @error="$event.target.remove()">
             <Icon class="cover-fallback" :name="isImage(v)?'image':'film'" :size="30"/>
             <span class="badge status" :class="STATUS[v.status]?.tone">{{statusLabel(v)}}</span>
             <span v-if="isImage(v)" class="badge kind"><Icon name="image" :size="12"/> 图集</span>

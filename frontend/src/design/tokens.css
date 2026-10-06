@@ -1,0 +1,177 @@
+/* Harbor-DL design tokens. The only place literal colors, radii, type sizes and spacing are defined.
+   Components read these variables; see docs/design-system.md for the rules. */
+:root{
+  /* Surfaces: page ground, then raised and sunken layers */
+  --bg:#f6f7f4;
+  --surface:#fff;
+  --surface-2:#f3f5ee;        /* quiet fill: table stripes, input wells, hover */
+  --surface-3:#e9eee2;        /* pressed, thumbnails, progress tracks */
+  --surface-ink:#15271f;      /* dark stage: player, gallery, toasts */
+  --overlay:rgba(20,32,26,.62);
+  --overlay-soft:rgba(255,255,255,.88);
+
+  /* Lines */
+  --border:#e4e8df;
+  --border-subtle:#eef0e9;
+  --border-strong:#d3dac9;    /* inputs, secondary buttons */
+
+  /* Text */
+  --text:#253c34;
+  --text-2:#4a5f54;           /* secondary copy */
+  --text-3:#6f7f75;           /* meta, captions (4.4:1 on white) */
+  --text-4:#9aa595;           /* placeholders, decorative icons only */
+  --on-brand:#fff;
+  --on-ink:#eef2db;           /* text on --surface-ink */
+  --on-ink-2:#a6b39b;
+  --gold:#f4e9c7;             /* logo accent */
+
+  /* Brand: harbor green */
+  --brand:#256349;
+  --brand-hover:#1a5039;
+  --brand-text:#2a6a50;       /* links, selected labels */
+  --brand-soft:#e8f0e4;       /* selected nav, active tab */
+  --brand-border:#9cc2a8;
+  --focus:#5f9c7b;
+
+  /* State colors: soft fill + text + border */
+  --success:#2f7d57;  --success-soft:#e6f1e8;  --success-text:#2f7d57;
+  --info:#3f77a8;     --info-soft:#e7eef8;     --info-text:#2f6a9c;      --info-border:#b9cfe6;
+  --warning:#a6761f;  --warning-soft:#fbf3de;  --warning-text:#8d6416;  --warning-border:#e5cf93;
+  --danger:#b5533a;   --danger-soft:#fcefea;   --danger-text:#9a4630;   --danger-border:#e8c5b8;
+
+  /* Platform marks (not theme-dependent) */
+  --platform-youtube:#c4302b;
+  --platform-bilibili:#00a1d6;
+
+  /* Radius */
+  --r-sm:4px;     /* tags, status chips */
+  --r-md:8px;     /* buttons, inputs, menu items */
+  --r-lg:12px;    /* cards, panels, dialogs */
+  --r-xl:16px;    /* large surfaces */
+  --r-pill:999px;
+
+  /* Type */
+  --font-sans:'Noto Sans SC',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-display:Georgia,'Noto Serif SC',serif;
+  --fs-11:11px;   /* labels, status, meta */
+  --fs-12:12px;   /* secondary text, dense controls */
+  --fs-13:13px;   /* default control and row text */
+  --fs-14:14px;   /* body */
+  --fs-16:16px;   /* card and section titles */
+  --fs-18:18px;
+  --fs-20:20px;   /* page sub-titles, brand */
+  --fs-24:24px;
+  --fs-28:28px;   /* page titles, key figures */
+  --fs-32:32px;
+
+  /* Spacing, 4px grid with 2 and 6 as half steps */
+  --sp-2:2px;  --sp-4:4px;  --sp-6:6px;  --sp-8:8px;  --sp-12:12px; --sp-16:16px;
+  --sp-20:20px; --sp-24:24px; --sp-32:32px; --sp-40:40px; --sp-48:48px; --sp-64:64px;
+
+  /* Controls: one height ladder for inputs, selects and buttons */
+  --control-sm:30px;
+  --control:36px;
+  --control-lg:42px;
+  --page-max:1280px;
+  --page-narrow:720px;
+
+  /* Elevation */
+  --shadow-sm:0 1px 2px rgba(25,50,38,.08);
+  --shadow-md:0 6px 16px rgba(25,50,38,.10);
+  --shadow-lg:0 18px 44px rgba(16,37,30,.22);
+
+  /* Motion */
+  --ease:cubic-bezier(.2,.7,.2,1);
+  --dur-fast:.12s;
+  --dur:.2s;
+
+  color-scheme:light;
+}
+
+:root[data-theme="dark"]{
+  --bg:#0e1612;
+  --surface:#151f1a;
+  --surface-2:#1a2620;
+  --surface-3:#24332b;
+  --surface-ink:#0a110e;
+  --overlay:rgba(4,9,7,.72);
+  --overlay-soft:rgba(21,31,26,.88);
+
+  --border:#26352d;
+  --border-subtle:#1e2b24;
+  --border-strong:#38493f;
+
+  --text:#e5ece7;
+  --text-2:#b9c6bd;
+  --text-3:#92a298;
+  --text-4:#667569;
+  --on-brand:#fff;
+  --on-ink:#e5ece7;
+  --on-ink-2:#92a298;
+  --gold:#e8d9a4;
+
+  --brand:#2f7d57;
+  --brand-hover:#3a8d66;
+  --brand-text:#7cc7a0;
+  --brand-soft:#1d3228;
+  --brand-border:#2f6a4e;
+  --focus:#5fb88a;
+
+  --success:#4ea67c;  --success-soft:#173125;  --success-text:#7cc7a0;
+  --info:#5b9bd0;     --info-soft:#15283a;     --info-text:#8ebbe4;     --info-border:#2c4a66;
+  --warning:#d1a14a;  --warning-soft:#33290f;  --warning-text:#e0b862;  --warning-border:#5b4719;
+  --danger:#d9745a;   --danger-soft:#3a1f19;   --danger-text:#eb9a84;   --danger-border:#6a3427;
+
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow-md:0 6px 16px rgba(0,0,0,.4);
+  --shadow-lg:0 18px 44px rgba(0,0,0,.55);
+
+  color-scheme:dark;
+}
+
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1612;
+    --surface:#151f1a;
+    --surface-2:#1a2620;
+    --surface-3:#24332b;
+    --surface-ink:#0a110e;
+    --overlay:rgba(4,9,7,.72);
+    --overlay-soft:rgba(21,31,26,.88);
+
+    --border:#26352d;
+    --border-subtle:#1e2b24;
+    --border-strong:#38493f;
+
+    --text:#e5ece7;
+    --text-2:#b9c6bd;
+    --text-3:#92a298;
+    --text-4:#667569;
+    --on-brand:#fff;
+    --on-ink:#e5ece7;
+    --on-ink-2:#92a298;
+    --gold:#e8d9a4;
+
+    --brand:#2f7d57;
+    --brand-hover:#3a8d66;
+    --brand-text:#7cc7a0;
+    --brand-soft:#1d3228;
+    --brand-border:#2f6a4e;
+    --focus:#5fb88a;
+
+    --success:#4ea67c;  --success-soft:#173125;  --success-text:#7cc7a0;
+    --info:#5b9bd0;     --info-soft:#15283a;     --info-text:#8ebbe4;     --info-border:#2c4a66;
+    --warning:#d1a14a;  --warning-soft:#33290f;  --warning-text:#e0b862;  --warning-border:#5b4719;
+    --danger:#d9745a;   --danger-soft:#3a1f19;   --danger-text:#eb9a84;   --danger-border:#6a3427;
+
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+    --shadow-md:0 6px 16px rgba(0,0,0,.4);
+    --shadow-lg:0 18px 44px rgba(0,0,0,.55);
+
+    color-scheme:dark;
+  }
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}

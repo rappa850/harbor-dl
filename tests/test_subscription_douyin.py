@@ -124,6 +124,19 @@ class IdentityTests(DouyinCase):
         self.assertEqual(request.headers['referer'],f'https://www.douyin.com/user/{SEC}')
         self.assertEqual(self.add().status_code,409)
 
+    def test_requests_carry_the_device_id_from_the_uifid_cookie(self):
+        self.client.put('/api/network/cookies/douyin',json={'cookie_content':'ttwid=t; UIFID=device-123; UIFID_TEMP=temp-9'})
+        self.subscription(nickname='')
+        self.assertEqual(self.fake.calls('/user/profile/other/')[0].url.params['uifid'],'device-123')
+
+    def test_uifid_rejection_is_reported_as_a_login_problem(self):
+        def blocked(request):
+            return httpx.Response(403,text='Blocked by ArgusSecurityPlugin Uifid Not Found')
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(blocked)
+        response=self.add()
+        self.assertEqual(response.status_code,502)
+        self.assertIn('UIFID',response.json()['detail'])
+
     def test_short_link_custom_nickname_and_rejections(self):
         response=self.add(url=f'分享 {SHORT} 复制打开',nickname='我的备注')
         self.assertEqual(response.status_code,201,response.text)
@@ -413,3 +426,42 @@ class DownloadTests(DouyinCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class SyncProgressTests(DouyinCase):
+    def setUp(self):
+        super().setUp()
+        self.item=self.subscription(auto_download=False);self.base='/api/subscriptions/'+self.item['id']
+
+    def test_progress_is_reported_per_page_and_cleared_afterwards(self):
+        catalog=self.app.state.catalog
+        self.assertIsNone(self.client.get(self.base+'/sync-progress').json()['progress'])
+        seen=[]
+        original=catalog.persist
+        def spy(subscription_id,unique):
+            seen.append(dict(catalog.progress[str(subscription_id)]));return original(subscription_id,unique)
+        catalog.persist=spy
+        self.fake.serve([[aweme(i) for i in range(1,19)],[aweme(i) for i in range(19,25)]])
+        self.assertEqual(self.client.post(self.base+'/sync').status_code,200)
+        self.assertEqual((seen[0]['state'],seen[0]['pages'],seen[0]['fetched'],seen[0]['total']),('running',2,24,40))
+        self.assertIsNone(self.client.get(self.base+'/sync-progress').json()['progress'])
+
+    def test_sync_concurrency_defaults_to_one_and_is_adjustable(self):
+        self.assertEqual(self.client.get('/api/settings').json()['sync_concurrency'],1)
+        saved=self.client.put('/api/settings',json={'concurrency':2,'sync_concurrency':2}).json()
+        self.assertEqual(saved['sync_concurrency'],2)
+        self.assertEqual(self.client.put('/api/settings',json={'concurrency':3}).json()['sync_concurrency'],2)   # omitted = unchanged
+        self.assertEqual(self.client.put('/api/settings',json={'concurrency':2,'sync_concurrency':4}).status_code,422)
+
+    def test_gate_lets_only_the_configured_number_run_at_once(self):
+        from backend.subscription_catalog import SyncGate
+        async def scenario(limit):
+            gate=SyncGate(lambda:limit[0]);running=peak=0
+            async def job():
+                nonlocal running,peak
+                async with gate:
+                    running+=1;peak=max(peak,running);await asyncio.sleep(0.02);running-=1
+            await asyncio.gather(*(job() for _ in range(4)))
+            return peak
+        self.assertEqual(asyncio.run(scenario([1])),1)
+        self.assertEqual(asyncio.run(scenario([2])),2)

@@ -1,4 +1,6 @@
 """Manual full catalog retrieval, separate from checks and download jobs."""
+import asyncio
+import inspect
 import json
 import math
 import re
@@ -13,6 +15,38 @@ INCREMENTAL_PAGES=5     # incremental check stops earlier once a page holds noth
 
 
 class SyncBusy(Exception):pass
+
+
+class SyncGate:
+    """Caps how many subscriptions talk to a platform at once (full syncs and checks share it).
+    The limit is read on every wake-up, so a settings change applies without a restart."""
+    def __init__(self,limit):
+        self.limit,self.running,self.waiting=limit,0,0
+        self.condition=None
+
+    def cond(self):
+        if self.condition is None:self.condition=asyncio.Condition()
+        return self.condition
+
+    async def acquire(self):
+        cond=self.cond()
+        async with cond:
+            self.waiting+=1
+            try:await cond.wait_for(lambda:self.running<max(1,self.limit()))
+            finally:self.waiting-=1
+            self.running+=1
+
+    async def release(self):
+        cond=self.cond()
+        async with cond:
+            self.running-=1;cond.notify_all()
+
+    async def poke(self):
+        cond=self.cond()
+        async with cond:cond.notify_all()
+
+    async def __aenter__(self):await self.acquire()
+    async def __aexit__(self,*exc):await self.release()
 
 VIDEO_STATUSES=('downloaded','downloading','not_downloaded','failed','cancelled','orphaned')
 
@@ -54,11 +88,35 @@ def entry_metadata(entry,platform):
 
 
 class SubscriptionCatalog:
-    def __init__(self,store,subscriptions,inspector,network,manager,registry=None):
+    def __init__(self,store,subscriptions,inspector,network,manager,registry=None,covers=None):
+        self.covers=covers
+        self.gate=SyncGate(self.sync_limit)
+        self.progress={}
         self.store,self.subscriptions,self.inspector,self.network=store,subscriptions,inspector,network
         self.manager=manager
         self.registry=registry
         self.active=set()
+
+    def sync_limit(self):
+        row=self.store.one("SELECT value FROM settings WHERE key='sync_concurrency'")
+        try:return max(1,int(row['value'])) if row else 1
+        except (TypeError,ValueError):return 1
+
+    def sync_progress(self,subscription_id):
+        """Live state of a running or queued sync/check, or None when idle."""
+        state=self.progress.get(str(subscription_id))
+        if state is None:return None
+        return {**state,'queue_position':max(1,self.gate.waiting) if state['state']=='queued' else 0,
+                'limit':self.sync_limit()}
+
+    def track(self,subscription_id,mode,total):
+        state={'state':'queued','mode':mode,'pages':0,'fetched':0,'total':total,'started_at':now()}
+        self.progress[str(subscription_id)]=state
+        return state
+
+    @staticmethod
+    def accepts_progress(adapter):
+        return 'progress' in inspect.signature(adapter.fetch).parameters
 
     def adapter(self,config):
         return self.registry.for_config(config) if self.registry else None
@@ -104,25 +162,49 @@ class SubscriptionCatalog:
         url=None if adapter else catalog_url(config)
         if subscription_id in self.active:raise SyncBusy()
         self.active.add(subscription_id)
+        state=self.track(subscription_id,'sync',config.get('video_count'))
         try:
-            if adapter:
-                fetched=await adapter.fetch(config,self.network.for_url(self.adapter_url(config)))
-                if not fetched.complete:raise ValueError('平台未返回完整作品列表，未保存此次同步')
-                unique=fetched.entries
-            else:
-                info=await self.inspector.raw_info(url,self.network.for_url(url),catalog=True)
-                if not isinstance(info,dict) or info.get('_type') not in ('playlist','multi_video') or str(info.get('id'))!=config['user_id']:
-                    raise ValueError('同步返回的集合身份不匹配，未保存此次同步')
-                entries=info.get('entries')
-                if not isinstance(entries,list):raise ValueError('平台未返回完整作品列表')
-                unique={}
-                for entry in entries:
-                    identity,metadata=entry_metadata(entry,config['platform'])
-                    unique[identity]=metadata
-            added=len(self.persist(subscription_id,unique))
-            return {'status':'completed','fetched':len(unique),'new_videos_count':added,
-                    'video_count':self.list(subscription_id,1,1)['total']}
-        finally:self.active.discard(subscription_id)
+            async with self.gate:
+                state['state']='running'
+                return await self.run_sync(subscription_id,config,adapter,url,state)
+        finally:
+            self.active.discard(subscription_id);self.progress.pop(subscription_id,None)
+
+    async def run_sync(self,subscription_id,config,adapter,url,state):
+        if adapter:
+            def report(pages,fetched):state['pages'],state['fetched']=pages,fetched
+            extra={'progress':report} if self.accepts_progress(adapter) else {}
+            fetched=await adapter.fetch(config,self.network.for_url(self.adapter_url(config)),**extra)
+            if not fetched.complete:raise ValueError('平台未返回完整作品列表，未保存此次同步')
+            unique=fetched.entries
+        else:
+            info=await self.inspector.raw_info(url,self.network.for_url(url),catalog=True)
+            if not isinstance(info,dict) or info.get('_type') not in ('playlist','multi_video') or str(info.get('id'))!=config['user_id']:
+                raise ValueError('同步返回的集合身份不匹配，未保存此次同步')
+            entries=info.get('entries')
+            if not isinstance(entries,list):raise ValueError('平台未返回完整作品列表')
+            unique={}
+            for entry in entries:
+                identity,metadata=entry_metadata(entry,config['platform'])
+                unique[identity]=metadata
+        added=len(self.persist(subscription_id,unique))
+        self.cache_covers(unique)
+        return {'status':'completed','fetched':len(unique),'new_videos_count':added,
+                'video_count':self.list(subscription_id,1,1)['total']}
+
+    def cache_covers(self,entries):
+        """Keep local copies of the covers in the background; the remote links expire."""
+        if self.covers is None:return
+        for metadata in entries.values():
+            cover=metadata.get('cover_url')
+            if cover and metadata.get('url'):
+                self.covers.fetch_later(metadata['url'],cover,self.network.for_url(cover))
+
+    def backfill_covers(self):
+        if self.covers is None:return
+        with self.store.connect() as db:
+            rows=[json.loads(r['metadata']) for r in db.execute('SELECT metadata FROM subscription_videos')]
+        self.cache_covers({str(i):m for i,m in enumerate(rows)})
 
     def adapter_url(self,config):
         return self.registry.get(config['platform']).home_url
@@ -168,14 +250,20 @@ class SubscriptionCatalog:
             raise ValueError(self.unavailable(config) or '此订阅类型的检查更新适配尚未完成')
         if subscription_id in self.active:raise SyncBusy()
         self.active.add(subscription_id)
+        state=self.track(subscription_id,'check',config.get('video_count'))
         try:
+            await self.gate.acquire()
             try:
+                state['state']='running'
                 with self.store.connect() as db:
                     known={row['video_id'] for row in db.execute('SELECT video_id FROM subscription_videos WHERE subscription_id=?',(subscription_id,))}
                 first=not known
+                def report(pages,count):state['pages'],state['fetched']=pages,count
+                extra={'progress':report} if self.accepts_progress(adapter) else {}
                 fetched=await adapter.fetch(config,self.network.for_url(self.adapter_url(config)),known=set(known),
-                                            max_pages=FIRST_CHECK_PAGES if first else INCREMENTAL_PAGES)
+                                            max_pages=FIRST_CHECK_PAGES if first else INCREMENTAL_PAGES,**extra)
                 created=self.persist(subscription_id,fetched.entries)
+                self.cache_covers(fetched.entries)
                 queued=0;problems=[]
                 if config['auto_download'] and config['status']=='active':
                     for row_id,video_id in created:
@@ -192,7 +280,9 @@ class SubscriptionCatalog:
             except (ValueError,PlatformError,TimeoutError) as exc:
                 self.record_state(subscription_id,mode,str(exc) or exc.__class__.__name__)
                 raise
-        finally:self.active.discard(subscription_id)
+            finally:await self.gate.release()
+        finally:
+            self.active.discard(subscription_id);self.progress.pop(subscription_id,None)
 
     def records(self,subscription_id):
         subscription_id=str(subscription_id)
@@ -206,6 +296,7 @@ class SubscriptionCatalog:
              'video_id':row['video_id'],'downloaded':bool(row['downloaded']),'download_task_id':row['download_task_id'],
              'error_message':row['error_message'],'created_at':row['created_at'],
              'asset_id':row['asset_id'],'media_kind':row['media_kind'],
+             'cover_local':self.covers.local(json.loads(row['metadata']).get('url')) if self.covers else None,
              'task_progress':row['task_progress'],'task_speed':row['task_speed'],
              **video_state(row,self.manager.assets)} for row in rows]
 

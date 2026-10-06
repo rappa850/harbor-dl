@@ -188,6 +188,9 @@ class DouyinAdapter(SubscriptionAdapter):
                 'device_memory': '8', 'platform': 'PC', 'downlink': '10', 'effective_type': '4g', 'round_trip_time': '100'}
         fp = cookie_value(cookie, 's_v_web_id')
         if fp:base.update(verifyFp=fp, fp=fp)
+        # The gateway rejects calls without the device id the web client echoes from its UIFID cookie (403 "Uifid Not Found").
+        uifid = cookie_value(cookie, 'UIFID') or cookie_value(cookie, 'UIFID_TEMP')
+        if uifid:base['uifid'] = uifid
         base.update(params)
         base['msToken'] = cookie_value(cookie, 'msToken') or ''.join(random.choices(string.ascii_letters + string.digits + '_-', k=107))
         query = urlencode(base, quote_via=quote)
@@ -205,7 +208,10 @@ class DouyinAdapter(SubscriptionAdapter):
             if attempt:await self.sleep(random.uniform(1.5, 3.5) * attempt)
             try:response = await client.get(self.signed_url(path, params, cookie), headers=headers)
             except httpx.HTTPError as exc:raise PlatformError(f'抖音请求失败：{exc.__class__.__name__}') from exc
-            if response.status_code >= 400:failure = f'抖音请求被拒绝（HTTP {response.status_code}），可能触发风控';continue
+            if response.status_code >= 400:
+                if 'Uifid Not Found' in response.text:
+                    raise PlatformError('抖音要求设备标识 UIFID，已保存的登录状态里没有，请重新登录抖音后再试')
+                failure = f'抖音请求被拒绝（HTTP {response.status_code}），可能触发风控';continue
             if not response.content.strip():failure = RISK_HINT;continue
             try:data = response.json()
             except ValueError:failure = RISK_HINT;continue
@@ -250,7 +256,7 @@ class DouyinAdapter(SubscriptionAdapter):
             signature=user.get('signature') or None, avatar_url=avatar[0] if avatar else None,
             follower_count=count('follower_count'), like_count=count('total_favorited'), video_count=count('aweme_count'))
 
-    async def fetch(self, config, network, known=None, max_pages=None):
+    async def fetch(self, config, network, known=None, max_pages=None, progress=None):
         sec_uid = config['user_id']
         result, cursor, limit = FetchResult(), 0, min(max_pages or MAX_PAGES, MAX_PAGES)
         async with self.client(network) as client:
@@ -272,6 +278,7 @@ class DouyinAdapter(SubscriptionAdapter):
                     result.entries[entry[0]] = entry[1]
                     # pinned works sit at the top regardless of age, so they say nothing about "already seen".
                     if known is not None and entry[0] not in known and not entry[1]['extra_data']['is_top']:fresh = True
+                if progress:progress(result.pages, len(result.entries))
                 more = bool(data.get('has_more'))
                 next_cursor = data.get('max_cursor')
                 if not more:result.complete = True;break

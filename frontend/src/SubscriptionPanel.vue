@@ -13,8 +13,8 @@ const emit=defineEmits(['play'])
 const items=ref(null),loadError=ref(''),selectedId=ref(null),tab=ref('works'),search=ref(''),filter=ref('')
 const addOpen=ref(false),loginOpen=ref(false),importOpen=ref(false),removing=ref(null),removeBusy=ref(false),removeError=ref('')
 const checking=ref({}),syncing=ref({}),errors=ref({}),cookieSaved=ref(false),works=ref(null),moreOpen=ref(false)
-const importText=ref(''),importResult=ref(null),importBusy=ref(false)
-let timer=null
+const progress=ref({}),importText=ref(''),importResult=ref(null),importBusy=ref(false)
+let timer=null,progressTimer=null
 
 function remember(id){try{id?localStorage.setItem('harbor.sub.selected',id):localStorage.removeItem('harbor.sub.selected')}catch(e){/* private mode */}}
 function recall(){try{return localStorage.getItem('harbor.sub.selected')}catch(e){return null}}
@@ -25,6 +25,23 @@ async function load(){
   }catch(e){loadError.value=e.message;if(items.value===null)items.value=[]}
 }
 async function loadCookie(){try{cookieSaved.value=!!(await props.api('/network')).cookies?.douyin?.exists}catch(e){cookieSaved.value=false}}
+const busyIds=computed(()=>(items.value||[]).filter(i=>i.runtime.is_syncing||syncing.value[i.id]||checking.value[i.id]).map(i=>i.id))
+async function pollProgress(){
+  const ids=busyIds.value
+  if(!ids.length){progress.value={};return}
+  const next={}
+  await Promise.all(ids.map(async id=>{try{next[id]=(await props.api(`/subscriptions/${id}/sync-progress`)).progress}catch(e){next[id]=null}}))
+  progress.value=next
+}
+function progressView(i){
+  const p=progress.value[i.id]
+  const verb=p?.mode==='check'?'检查更新':'同步完整历史'
+  if(!p)return {text:syncing.value[i.id]||checking.value[i.id]?'正在准备…':'',pct:null}
+  if(p.state==='queued')return {text:`排队中：同一时间最多处理 ${p.limit} 个订阅，轮到后自动开始`,pct:null,queued:true}
+  const pct=p.total&&p.mode==='sync'?Math.min(99,Math.round(p.fetched/p.total*100)):null
+  const count=p.total&&p.mode==='sync'?`已读取 ${p.fetched} / 约 ${p.total} 项`:`已读取 ${p.fetched} 项`
+  return {text:`正在${verb} · ${count}${p.pages?`（第 ${p.pages} 页）`:''}`,pct}
+}
 function select(id){selectedId.value=id;remember(id);tab.value='works';moreOpen.value=false}
 const selected=computed(()=>items.value?.find(i=>i.id===selectedId.value)||null)
 const visible=computed(()=>{
@@ -79,8 +96,8 @@ async function runImport(){
   finally{importBusy.value=false}
 }
 const closeMore=()=>{moreOpen.value=false}
-onMounted(()=>{load();loadCookie();timer=setInterval(()=>{if(!document.hidden)load()},20000);document.addEventListener('click',closeMore)})
-onUnmounted(()=>{clearInterval(timer);document.removeEventListener('click',closeMore)})
+onMounted(()=>{load();loadCookie();progressTimer=setInterval(()=>{if(!document.hidden)pollProgress()},1000);timer=setInterval(()=>{if(!document.hidden)load()},20000);document.addEventListener('click',closeMore)})
+onUnmounted(()=>{clearInterval(timer);clearInterval(progressTimer);document.removeEventListener('click',closeMore)})
 watch(addOpen,v=>{if(v)loadCookie()})
 </script>
 
@@ -135,7 +152,10 @@ watch(addOpen,v=>{if(v)loadCookie()})
           </div>
         </header>
 
-        <div v-if="syncing[selected.id]" class="notice info"><Icon name="refresh" :size="16" class="spin"/><span>正在同步完整历史，作品多时需要几分钟，可以离开此页。</span></div>
+        <div v-if="busyIds.includes(selected.id)" class="notice info sync-progress" role="status" aria-live="polite"><Icon :name="progressView(selected).queued?'clock':'refresh'" :size="16" :class="{spin:!progressView(selected).queued}"/>
+          <div class="sync-body"><span>{{progressView(selected).text}}</span>
+            <div class="sync-bar" :class="{indeterminate:progressView(selected).pct===null&&!progressView(selected).queued,queued:progressView(selected).queued}" role="progressbar" :aria-valuenow="progressView(selected).pct??undefined" aria-valuemin="0" aria-valuemax="100"><i :style="progressView(selected).pct!==null?{width:progressView(selected).pct+'%'}:null"></i></div>
+            <small>作品多时需要几分钟，可以离开此页，同步会继续。</small></div></div>
         <div v-if="errors[selected.id]||selected.runtime.last_error" class="notice bad" role="alert"><Icon name="alert" :size="16"/>
           <span><strong>{{errors[selected.id]?'操作失败':'最近一次检查失败'}}：</strong>{{errors[selected.id]||selected.runtime.last_error}}</span>
           <button v-if="selected.platform==='douyin'" class="link" @click="loginOpen=true">{{cookieSaved?'重新登录抖音':'登录抖音'}}</button></div>

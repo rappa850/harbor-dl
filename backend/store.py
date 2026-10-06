@@ -71,6 +71,7 @@ class Store:
                     last_error TEXT, last_mode TEXT, last_new_count INTEGER NOT NULL DEFAULT 0,
                     last_queued_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
                 INSERT OR IGNORE INTO settings VALUES ('concurrency', '2');
+                INSERT OR IGNORE INTO settings VALUES ('sync_concurrency', '1');
                 PRAGMA user_version=1;
             """)
             columns = {row['name'] for row in db.execute('PRAGMA table_info(tasks)')}
