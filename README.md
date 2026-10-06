@@ -137,6 +137,7 @@ library/
 | 环境变量 | 作用 | 默认值 |
 | --- | --- | --- |
 | `HARBOR_DATA_DIR` | 数据目录 | `./var`（镜像里是 `/data`） |
+| `HARBOR_FFMPEG` | FFmpeg 可执行文件路径 | 自动查找系统 `ffmpeg`，找不到时使用 `imageio-ffmpeg` 自带的 |
 | `HARBOR_CHROME` | Chrome / Chromium 可执行文件路径 | 自动查找（镜像里是 `/usr/bin/chromium`） |
 | `HARBOR_BROWSER_MODE` | `desktop` 弹出可见窗口；`docker` 使用虚拟显示 + noVNC | `desktop`（镜像里是 `docker`） |
 | `HARBOR_DISPLAY` | Docker 模式的显示号 | `:99` |

@@ -31,7 +31,11 @@ jobs:
           Xvfb :99 -screen 0 1280x1024x24 -ac -noreset >/tmp/xvfb.log 2>&1 &
           for i in $(seq 1 20); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.5; done
           ls -l /tmp/.X11-unix/
-      - run: ffmpeg -version | head -1; python -c "from backend.live_recording import ffmpeg_executable as f; print(f())"
+      # The runner's system ffmpeg crashes (SIGSEGV) on the recording command; use the build that ships with imageio-ffmpeg.
+      - name: Use the bundled ffmpeg
+        run: |
+          echo "HARBOR_FFMPEG=$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" >> "$GITHUB_ENV"
+          ffmpeg -version | head -1
       - run: python -m unittest discover -s tests
 
   frontend:

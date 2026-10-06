@@ -1,6 +1,7 @@
 """Own FFmpeg processes, recording history and current-session stop markers."""
 import asyncio
 import json
+import os
 import shutil
 import time
 import uuid
@@ -12,6 +13,8 @@ class RecordingConflict(Exception):pass
 
 
 def ffmpeg_executable():
+    configured=os.environ.get('HARBOR_FFMPEG')
+    if configured and Path(configured).is_file():return configured
     executable=shutil.which('ffmpeg')
     if executable:return executable
     try:
