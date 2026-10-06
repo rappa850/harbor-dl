@@ -36,6 +36,21 @@ jobs:
         run: |
           echo "HARBOR_FFMPEG=$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" >> "$GITHUB_ENV"
           ffmpeg -version | head -1
+      - name: ffmpeg diagnostics (temporary)
+        continue-on-error: true
+        run: |
+          set +e
+          F="$HARBOR_FFMPEG"; cd "$RUNNER_TEMP"
+          $F -hide_banner -loglevel error -y -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:a mp2 -f mpegts audio.ts; echo "make audio-only sample: $?"
+          $F -hide_banner -loglevel error -y -f lavfi -i testsrc=size=64x48:rate=5 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 1 -c:v mpeg2video -c:a mp2 -f mpegts av.ts; echo "make audio+video sample: $?"
+          run() { name="$1"; shift; rm -f out.ts; "$@" 2>err.txt; echo "$name => exit $?"; head -c 300 err.txt; }
+          run "current args, audio-only" $F -hide_banner -loglevel error -n -i audio.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts
+          run "no -map, audio-only      " $F -hide_banner -loglevel error -n -i audio.ts -c copy -f mpegts out.ts
+          run "-map 0:a? only, audio    " $F -hide_banner -loglevel error -n -i audio.ts -map '0:a?' -c copy -f mpegts out.ts
+          run "current args, audio+video" $F -hide_banner -loglevel error -n -i av.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts
+          run "-map 0 , audio-only      " $F -hide_banner -loglevel error -n -i audio.ts -map 0 -c copy -f mpegts out.ts
+          echo "system ffmpeg:"; ffmpeg -version | head -1
+          rm -f out.ts; ffmpeg -hide_banner -loglevel error -n -i audio.ts -map '0:v?' -map '0:a?' -c copy -f mpegts out.ts; echo "system ffmpeg, current args, audio-only => exit $?"
       - run: python -m unittest discover -s tests
 
   frontend:
