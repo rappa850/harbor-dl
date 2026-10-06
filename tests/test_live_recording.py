@@ -121,7 +121,7 @@ class LiveRecordingTests(unittest.TestCase):
             client.post('/api/auth/login',json={'username':'admin','password':'test-password-123'})
             response=client.post(self.base+'/record/start');self.assertEqual(response.status_code,201,response.text)
             item=self.wait_terminal(client)
-            self.assertEqual(item['status'],'completed');self.assertGreater(item['file_size'],0)
+            self.assertEqual(item['status'],'completed',item);self.assertGreater(item['file_size'],0)
             self.assertIsNotNone(item['end_time'])
             download=client.get('/api/live/records/'+item['id']+'/download')
             self.assertEqual(download.status_code,200);self.assertEqual(len(download.content),item['file_size'])

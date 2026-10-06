@@ -42,7 +42,7 @@
 
 ## 快速开始（Docker Compose）
 
-需要 Docker 与 Docker Compose。镜像由 GitHub Actions 构建并发布到 GitHub Container Registry，支持 `linux/amd64` 与 `linux/arm64`。
+需要 Docker 与 Docker Compose。镜像由 GitHub Actions 构建并发布到 GitHub Container Registry，目前只提供 `linux/amd64`。
 
 1. 新建一个目录，保存下面的内容为 `docker-compose.yml`（仓库根目录也有同样的文件）：
 

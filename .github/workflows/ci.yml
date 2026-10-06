@@ -23,6 +23,15 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
+      # the Docker-mode browser tests expect the virtual display the container provides
+      - name: Virtual display
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          Xvfb :99 -screen 0 1280x1024x24 -ac -noreset >/tmp/xvfb.log 2>&1 &
+          for i in $(seq 1 20); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.5; done
+          ls -l /tmp/.X11-unix/
+      - run: ffmpeg -version | head -1; python -c "from backend.live_recording import ffmpeg_executable as f; print(f())"
       - run: python -m unittest discover -s tests
 
   frontend:
