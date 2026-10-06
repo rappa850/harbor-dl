@@ -1,0 +1,8 @@
+.venv
+frontend/node_modules
+frontend/dist
+var
+evidence
+__pycache__
+*.pyc
+tests
