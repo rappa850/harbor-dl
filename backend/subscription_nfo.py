@@ -21,7 +21,7 @@ class NfoInput(BaseModel):
 
 
 class SubscriptionNfo:
-    def __init__(self,store,manager):self.store,self.manager=store,manager
+    def __init__(self,store,manager,library=None):self.store,self.manager,self.library=store,manager,library
 
     def locate(self,db,subscription_id,video_id):
         subscription_id,video_id=str(subscription_id),str(video_id)
@@ -44,6 +44,10 @@ class SubscriptionNfo:
             raise ValueError('作品文件不在所属任务目录，无法定位 NFO')
         nfo=media.with_suffix('.nfo')
         if is_link(nfo):raise ValueError('NFO 路径为链接，无法编辑')
+        exported=self.library.nfo_path(row['download_task_id']) if self.library else None
+        if exported is not None:                                  # the copy a media server reads wins over a sidecar in the download folder
+            if is_link(exported):raise ValueError('NFO 路径为链接，无法编辑')
+            return row,exported
         return row,nfo
 
     def exists(self,subscription_id,video_id):
@@ -82,11 +86,12 @@ class SubscriptionNfo:
                     raise NfoConflict('NFO 内容已变化，请重新打开后编辑')
                 with tempfile.NamedTemporaryFile(dir=path.parent,prefix='.harbor-nfo-',delete=False) as output:
                     temporary=output.name;output.write(raw);output.flush();os.fsync(output.fileno())
-                relative=path.relative_to(self.manager.root).as_posix()
-                task_exists=db.execute('SELECT id FROM tasks WHERE id=?',(row['download_task_id'],)).fetchone()
-                db.execute('INSERT INTO media_assets(id,path,task_id,title,kind,is_primary,created_at) '
-                           'VALUES (?,?,?,?,?,?,?) ON CONFLICT(path) DO NOTHING',
-                           (str(uuid.uuid4()),relative,row['download_task_id'] if task_exists else None,path.name,'attachment',0,now()))
+                if path.is_relative_to(self.manager.root):         # NFO files in the media library are not download assets
+                    relative=path.relative_to(self.manager.root).as_posix()
+                    task_exists=db.execute('SELECT id FROM tasks WHERE id=?',(row['download_task_id'],)).fetchone()
+                    db.execute('INSERT INTO media_assets(id,path,task_id,title,kind,is_primary,created_at) '
+                               'VALUES (?,?,?,?,?,?,?) ON CONFLICT(path) DO NOTHING',
+                               (str(uuid.uuid4()),relative,row['download_task_id'] if task_exists else None,path.name,'attachment',0,now()))
                 if is_link(path):raise ValueError('NFO 路径已变为链接，未保存')
                 if payload.expected_etag is not None and hashlib.sha256(self.read_bytes(path)).hexdigest()!=payload.expected_etag:
                     raise NfoConflict('NFO 内容已变化，未保存')

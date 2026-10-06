@@ -6,6 +6,7 @@ import GalleryPlayer from './components/GalleryPlayer.vue'
 import MediaPlayer from './components/MediaPlayer.vue'
 import LibraryView from './library/LibraryView.vue'
 import ImmersivePlayer from './player/ImmersivePlayer.vue'
+import {route,go,setQuery} from './router.js'
 import {groupFiles} from './library/library.js'
 import Icon from './components/Icon.vue'
 import {applyTheme,getTheme,nextTheme,themeLabel} from './design/theme.js'
@@ -13,9 +14,9 @@ import {resumeTime,playbackIndex} from './playback-policy.js'
 
 const account = ref(null), needsSetup = ref(false), booting = ref(true), busy = ref(false)
 const username = ref(''), password = ref(''), error = ref(''), notice = ref('')
-const page = ref('dashboard'), url = ref(''), taskTitle = ref(''), filter = ref(''), query = ref('')
+const page = computed({get:()=>route.page,set:v=>go({page:v})}), url = ref(''), taskTitle = ref(''), filter = ref(''), query = ref('')
 const tasks = ref([]), files = ref([]), stats = ref({counts:{},disk:{},recent_tasks:[]})
-const settings = ref({concurrency:2,sync_concurrency:1}), capabilities = ref([]), selectedTask = ref(null), playing = ref(null)
+const settings = ref({concurrency:2,sync_concurrency:1,library:{enabled:false,auto:true,delete_with_work:false,root:'',default_root:''}}), capabilities = ref([]), selectedTask = ref(null), playing = ref(null)
 const deleteMedia = ref(true), deleteRelated = ref(true)
 const deleting = ref(null), adding = ref(false), syncing = ref(false), connectionError = ref('')
 const parsed = ref(null), selectedFormat = ref(''), subtitles = ref(true), thumbnail = ref(true)
@@ -73,6 +74,8 @@ const nav = [{id:'dashboard',icon:'◈',name:'概览'}, {id:'tasks',icon:'↓',n
              {id:'subscriptions',icon:'↻',name:'作者订阅'},
              {id:'live',icon:'◉',name:'直播配置'},
              {id:'files',icon:'▦',name:'媒体库'}, {id:'roadmap',icon:'◇',name:'功能进度'}, {id:'settings',icon:'⚙',name:'设置'}]
+watch(page,value=>{if(value==='settings'&&account.value)pollLibrary()},{immediate:false})
+watch(page,value=>{document.title=`${nav.find(n=>n.id===value)?.name||'Harbor-DL'} · Harbor-DL`},{immediate:true})
 const labels = {PENDING:'排队中',DOWNLOADING:'下载中',PROCESSING:'处理中',COMPLETED:'已完成',ERROR:'失败',CANCELLED:'已取消'}
 const taskPage = ref(1), taskTotal = ref(0), taskPlatform = ref(''), manualOnly = ref(false), orphanOnly = ref(false)
 const visibleTasks = computed(() => tasks.value)
@@ -147,6 +150,22 @@ async function createTask(quick=false) {
 async function action(t,kind) {try{await api(`/tasks/${t.id}/${kind}`,'POST');toast(kind==='retry'?'任务已重新排队':'任务已取消');await refresh()}catch(e){toast(e.message)} }
 async function detail(t) {try{selectedTask.value=await api(`/tasks/${t.id}`)}catch(e){toast(e.message)} }
 async function remove() {busy.value=true;try{await api(`/tasks/${deleting.value.id}?delete_file=${deleteMedia.value}&delete_related=${deleteRelated.value}`,'DELETE');deleting.value=null;toast(deleteMedia.value?'任务及选定文件已删除':'任务已删除，媒体文件已保留');await refresh()}catch(e){toast(e.message)}finally{busy.value=false} }
+// Media-server library (Jellyfin / Emby): folder per work with video, poster and NFO.
+const libraryJob=ref(null),libraryOverwrite=ref(false);let libraryTimer=null
+async function saveLibrary(){
+  busy.value=true
+  try{const l=settings.value.library;settings.value=await api('/settings','PUT',{concurrency:Number(settings.value.concurrency),library:{enabled:l.enabled,auto:l.auto,delete_with_work:l.delete_with_work,root:l.root===l.default_root?'':l.root}});toast('媒体库设置已保存')}
+  catch(e){toast(e.message)}finally{busy.value=false}
+}
+async function pollLibrary(){
+  try{libraryJob.value=await api('/library/export/progress')}catch(e){return}
+  clearTimeout(libraryTimer)
+  if(libraryJob.value?.state==='running')libraryTimer=setTimeout(pollLibrary,1000)
+}
+async function exportLibrary(){
+  try{libraryJob.value=await api(`/library/export${libraryOverwrite.value?'?overwrite=true':''}`,'POST');pollLibrary()}catch(e){toast(e.message)}
+}
+const libraryPercent=computed(()=>libraryJob.value?.total?Math.round(libraryJob.value.done/libraryJob.value.total*100):0)
 async function saveSettings() {busy.value=true;try{settings.value=await api('/settings','PUT',{concurrency:Number(settings.value.concurrency),sync_concurrency:Number(settings.value.sync_concurrency)});toast('设置已保存')}catch(e){toast(e.message)}finally{busy.value=false} }
 async function saveProxy() {busy.value=true;try{network.value=await api('/network/proxy','PUT',{enabled:network.value.enabled,proxy:proxyInput.value.trim()||null,no_proxy:network.value.no_proxy});proxyInput.value='';toast('代理配置已保存')}catch(e){toast(e.message)}finally{busy.value=false}}
 async function saveCookie() {busy.value=true;try{network.value=await api(`/network/cookies/${cookiePlatform.value}`,'PUT',{cookie_content:cookieInput.value});cookieInput.value='';toast('Cookie 已保存')}catch(e){toast(e.message)}finally{busy.value=false}}
@@ -178,6 +197,38 @@ function enterImmersive(){
 }
 function immersiveChange(file){openPlayer(file,Boolean(playerScope.value),true)}
 function immersiveEnded(event){captureProgress(event);persistPlayback()}
+// The open player lives in the URL (?play=<id>[&view=immersive]) so a reload or shared link returns to it, and Back closes it.
+// Library files are addressed by file id; on a subscription page by work id (the id the playback record uses).
+let playPushed=false
+const playKey=file=>file?(playerScope.value&&file.work_id?file.work_id:file.id):''
+watch([playing,immersive],()=>{
+  if(!account.value)return
+  const key=playKey(playing.value),view=immersive.value?'immersive':''
+  if(!key){
+    if(route.query.play){if(playPushed){playPushed=false;history.back()}else setQuery({play:'',view:''})}
+    return
+  }
+  if(route.query.play===key&&(route.query.view||'')===view)return
+  if(route.query.play)setQuery({play:key,view})                      // next/previous inside the player: no extra history entries
+  else{go({query:{...route.query,play:key,view}});playPushed=true}
+})
+async function openFromRoute(){
+  const key=route.query.play||'',view=route.query.view==='immersive'
+  if(!account.value)return
+  if(!key){if(playing.value){playPushed=false;closePlayer()}return}
+  if(playKey(playing.value)===key&&immersive.value===view)return
+  if(route.page==='subscriptions'&&route.sub){
+    await openSubscriptionPlayer({subscriptionId:route.sub,videoId:key,immersive:view})
+    if(!playing.value)setQuery({play:'',view:''})
+    return
+  }
+  if(route.page!=='files')return setQuery({play:'',view:''})
+  if(!files.value.length)return                                       // files still loading: runs again when they arrive
+  const items=libraryFeed(),at=items.findIndex(f=>f.id===key)
+  if(at<0)return setQuery({play:'',view:''})
+  if(view)startLibraryImmersive({items,start:at});else openPlayer(items[at])
+}
+watch(()=>[route.query.play,route.query.view,route.page,route.sub,account.value,files.value.length>0],openFromRoute,{immediate:true})
 function nextMedia(direction=1,random=false) {
   const list=playerScope.value?playerList.value:groupFiles(files.value).map(e=>e.primary).filter(playable)
   const current=list.findIndex(f=>f.id===playing.value?.id)
@@ -203,7 +254,7 @@ onMounted(async()=>{
   poll=setInterval(refresh,2000)
   progressPoll=setInterval(persistPlayback,5000)
 })
-onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);clearTimeout(notificationTimer);clearTimeout(filterTimer)})
+onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);clearTimeout(notificationTimer);clearTimeout(filterTimer);clearTimeout(libraryTimer)})
 </script>
 
 <template>
@@ -233,7 +284,7 @@ onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);c
 
       <template v-if="page==='files'"><LibraryView :files="files" :size="size" :date="date" @play="openPlayer($event)" @immersive="startLibraryImmersive" @refresh="refresh" @create="openDownload"/></template>
 
-      <div v-if="page==='settings'" class="settings-grid"><section class="panel settings"><h2>下载设置</h2><p>调整任务处理方式，设置会在重启后保留。</p><form @submit.prevent="saveSettings"><label>同时下载的任务数<input type="number" v-model.number="settings.concurrency" min="1" max="8" required><small>1–8 项，用于控制带宽与系统负载。</small></label><label>同时同步的订阅数<input type="number" v-model.number="settings.sync_concurrency" min="1" max="3" required><small>1–3 个，默认 1。全量同步与检查更新共用这个上限，多出的订阅会排队；数值越小，对媒体平台的请求越少、越不容易触发风控。</small></label><button class="primary" :disabled="busy">保存设置</button></form></section><section class="panel settings"><h2>运行环境</h2><div class="setting-row"><span>应用版本</span><strong>{{settings.version}}</strong></div><div class="setting-row"><span>FFmpeg</span><strong :class="{warning:!settings.ffmpeg_available}">{{settings.ffmpeg_available?'已安装':'未检测到'}}</strong></div><p v-if="!settings.ffmpeg_available" class="hint">部分媒体需要合并音视频轨道。部署时安装 FFmpeg 可支持这类下载。</p><div class="setting-row"><span>软件许可证</span><strong>MIT · 所有业务功能开放</strong></div></section><section class="panel settings"><h2>网络代理</h2><p>解析与下载共用代理配置。绕过名单支持域名、前导点和 * 通配符，逗号分隔。</p><form @submit.prevent="saveProxy"><label class="download-option"><input type="checkbox" v-model="network.enabled">启用全局代理</label><label>代理地址<input type="password" v-model="proxyInput" autocomplete="off" placeholder="http://host:port 或 socks5://host:port"><small>{{network.has_proxy?'当前 '+network.proxy_display+'；留空保留已保存地址':'尚未配置代理地址'}}</small></label><label>绕过代理<input v-model="network.no_proxy" maxlength="4096"></label><button class="primary" :disabled="busy">保存代理</button></form></section><section class="panel settings"><h2>平台 Cookie</h2><p>导入 Netscape Cookie 文件内容或单行 Cookie 请求头。保存后用于该平台的解析与下载。</p><form @submit.prevent="saveCookie"><label>平台<select v-model="cookiePlatform" @change="cookieInput='' "><option v-for="(name,key) in platformNames" :key="key" :value="key">{{name}}</option></select></label><p>{{network.cookies[cookiePlatform]?.exists?'已配置 · '+date(network.cookies[cookiePlatform].updated_at):'未配置'}} · 保存状态不代表平台登录仍然有效</p><label>Cookie 内容<textarea v-model="cookieInput" rows="6" maxlength="524288" autocomplete="off" spellcheck="false" placeholder="粘贴 Cookie 内容"></textarea></label><div class="download-buttons"><button class="primary" :disabled="busy || !cookieInput.trim()">保存 Cookie</button><button type="button" :disabled="busy || !network.cookies[cookiePlatform]?.exists" @click="clearCookie">清空 Cookie</button></div></form></section><section class="panel settings"><h2>API Token</h2><p>为脚本或外部应用创建独立令牌。调用时使用 X-API-Token 请求头或 Authorization: Bearer。</p><form @submit.prevent="createToken"><label>用途名称<input v-model="tokenName" maxlength="128" required></label><label>有效天数<input type="number" v-model="tokenDays" min="1" step="1" placeholder="留空为不过期"></label><button class="primary" :disabled="busy">创建 Token</button></form><div v-if="rawToken" class="token-reveal"><p>请复制保存：完整 Token 只在这次创建或重置时显示。</p><label>完整 Token<textarea :value="rawToken" readonly rows="3" spellcheck="false" aria-label="完整 API Token"></textarea></label><button @click="rawToken=''">我已保存，关闭显示</button></div><article v-for="token in tokenItems" :key="token.id" class="token-item"><label>名称<input v-model="token.name" maxlength="128" required></label><p>末尾 {{token.token_suffix}} · {{token.expires_at ? '到期 '+date(token.expires_at) : '不过期'}} · 最近使用 {{date(token.last_used_at)}}</p><label>到期时间（清空为不过期）<input type="datetime-local" step="1" v-model="token.expires_local"></label><label class="download-option"><input type="checkbox" v-model="token.is_active">启用</label><div class="download-buttons"><button :disabled="busy" @click="editToken(token)">保存编辑</button><button :disabled="busy" @click="tokenAction={kind:'regenerate',token}">重新生成</button><button :disabled="busy" class="danger-text" @click="tokenAction={kind:'delete',token}">删除</button></div></article><p v-if="!tokenItems.length">尚未创建 Token。</p></section></div>
+      <div v-if="page==='settings'" class="settings-grid"><section class="panel settings"><h2>下载设置</h2><p>调整任务处理方式，设置会在重启后保留。</p><form @submit.prevent="saveSettings"><label>同时下载的任务数<input type="number" v-model.number="settings.concurrency" min="1" max="8" required><small>1–8 项，用于控制带宽与系统负载。</small></label><label>同时同步的订阅数<input type="number" v-model.number="settings.sync_concurrency" min="1" max="3" required><small>1–3 个，默认 1。全量同步与检查更新共用这个上限，多出的订阅会排队；数值越小，对媒体平台的请求越少、越不容易触发风控。</small></label><button class="primary" :disabled="busy">保存设置</button></form></section><section class="panel settings"><h2>媒体服务器（Jellyfin / Emby）</h2><p>为每个视频作品生成独立文件夹：视频、封面、NFO 在一起，结构为「作者/标题 [作品ID]」。视频使用硬链接（跨磁盘时复制），下载目录不受影响；图集作品不导出。</p><form @submit.prevent="saveLibrary"><label class="download-option"><input type="checkbox" v-model="settings.library.enabled">启用媒体库导出</label><label>媒体库目录<input v-model="settings.library.root" :placeholder="settings.library.default_root" maxlength="1024"><small>必须是绝对路径，且不能在下载目录或封面缓存内。网盘备份只需同步这个目录；留空使用默认位置。</small></label><label class="download-option"><input type="checkbox" v-model="settings.library.auto" :disabled="!settings.library.enabled">下载完成后自动导出</label><label class="download-option"><input type="checkbox" v-model="settings.library.delete_with_work">删除下载任务时，同时删除对应的媒体库文件夹</label><button class="primary" :disabled="busy">保存媒体库设置</button></form><div class="library-export"><div class="setting-row"><span>已下载作品</span><button class="btn" :disabled="!settings.library.enabled||libraryJob?.state==='running'" @click="exportLibrary">{{libraryJob?.state==='running'?'导出中…':'导出全部已下载作品'}}</button></div><label class="download-option"><input type="checkbox" v-model="libraryOverwrite">同时覆盖我手动修改过的 NFO</label><div v-if="libraryJob&&libraryJob.state!=='idle'" class="sync-progress notice info" role="status"><div class="sync-body"><span>{{libraryJob.state==='running'?'正在导出':'导出完成'}} · {{libraryJob.done}} / {{libraryJob.total}}</span><div class="sync-bar"><i :style="{width:libraryPercent+'%'}"></i></div><small>新导出 {{libraryJob.exported}} · 无变化 {{libraryJob.unchanged}} · 跳过图集 {{libraryJob.galleries}} · 跳过其他 {{libraryJob.skipped}} · 失败 {{libraryJob.failed}} · 封面用视频截帧代替 {{libraryJob.frames}} · 无封面 {{libraryJob.no_cover}}</small><small v-for="e in libraryJob.errors" :key="e" class="task-error">{{e}}</small></div></div></div></section><section class="panel settings"><h2>运行环境</h2><div class="setting-row"><span>应用版本</span><strong>{{settings.version}}</strong></div><div class="setting-row"><span>FFmpeg</span><strong :class="{warning:!settings.ffmpeg_available}">{{settings.ffmpeg_available?'已安装':'未检测到'}}</strong></div><p v-if="!settings.ffmpeg_available" class="hint">部分媒体需要合并音视频轨道。部署时安装 FFmpeg 可支持这类下载。</p><div class="setting-row"><span>软件许可证</span><strong>MIT · 所有业务功能开放</strong></div></section><section class="panel settings"><h2>网络代理</h2><p>解析与下载共用代理配置。绕过名单支持域名、前导点和 * 通配符，逗号分隔。</p><form @submit.prevent="saveProxy"><label class="download-option"><input type="checkbox" v-model="network.enabled">启用全局代理</label><label>代理地址<input type="password" v-model="proxyInput" autocomplete="off" placeholder="http://host:port 或 socks5://host:port"><small>{{network.has_proxy?'当前 '+network.proxy_display+'；留空保留已保存地址':'尚未配置代理地址'}}</small></label><label>绕过代理<input v-model="network.no_proxy" maxlength="4096"></label><button class="primary" :disabled="busy">保存代理</button></form></section><section class="panel settings"><h2>平台 Cookie</h2><p>导入 Netscape Cookie 文件内容或单行 Cookie 请求头。保存后用于该平台的解析与下载。</p><form @submit.prevent="saveCookie"><label>平台<select v-model="cookiePlatform" @change="cookieInput='' "><option v-for="(name,key) in platformNames" :key="key" :value="key">{{name}}</option></select></label><p>{{network.cookies[cookiePlatform]?.exists?'已配置 · '+date(network.cookies[cookiePlatform].updated_at):'未配置'}} · 保存状态不代表平台登录仍然有效</p><label>Cookie 内容<textarea v-model="cookieInput" rows="6" maxlength="524288" autocomplete="off" spellcheck="false" placeholder="粘贴 Cookie 内容"></textarea></label><div class="download-buttons"><button class="primary" :disabled="busy || !cookieInput.trim()">保存 Cookie</button><button type="button" :disabled="busy || !network.cookies[cookiePlatform]?.exists" @click="clearCookie">清空 Cookie</button></div></form></section><section class="panel settings"><h2>API Token</h2><p>为脚本或外部应用创建独立令牌。调用时使用 X-API-Token 请求头或 Authorization: Bearer。</p><form @submit.prevent="createToken"><label>用途名称<input v-model="tokenName" maxlength="128" required></label><label>有效天数<input type="number" v-model="tokenDays" min="1" step="1" placeholder="留空为不过期"></label><button class="primary" :disabled="busy">创建 Token</button></form><div v-if="rawToken" class="token-reveal"><p>请复制保存：完整 Token 只在这次创建或重置时显示。</p><label>完整 Token<textarea :value="rawToken" readonly rows="3" spellcheck="false" aria-label="完整 API Token"></textarea></label><button @click="rawToken=''">我已保存，关闭显示</button></div><article v-for="token in tokenItems" :key="token.id" class="token-item"><label>名称<input v-model="token.name" maxlength="128" required></label><p>末尾 {{token.token_suffix}} · {{token.expires_at ? '到期 '+date(token.expires_at) : '不过期'}} · 最近使用 {{date(token.last_used_at)}}</p><label>到期时间（清空为不过期）<input type="datetime-local" step="1" v-model="token.expires_local"></label><label class="download-option"><input type="checkbox" v-model="token.is_active">启用</label><div class="download-buttons"><button :disabled="busy" @click="editToken(token)">保存编辑</button><button :disabled="busy" @click="tokenAction={kind:'regenerate',token}">重新生成</button><button :disabled="busy" class="danger-text" @click="tokenAction={kind:'delete',token}">删除</button></div></article><p v-if="!tokenItems.length">尚未创建 Token。</p></section></div>
 
       <template v-if="page==='roadmap'"><section class="roadmap-intro"><span class="tag">ROADMAP</span><h2>一步一步，把媒体平台做完整。</h2><p>下面显示当前真实的实现状态。待建设模块尚未提供服务。</p></section><section class="panel"><article v-for="c in capabilities" :key="c.id" class="roadmap-row"><span class="phase">0{{c.phase}}</span><div><h3>{{c.name}}</h3><p>{{c.status==='available'?'已实现，可在工作台使用':c.status==='partial'?'配置、手动同步已接入；抖音博主支持定时检查与自动下载，其他平台待适配':'规划中，后续阶段实现'}}</p></div><span :class="['status',c.status==='available'?'COMPLETED':'PENDING']">{{c.status==='available'?'已开放':c.status==='partial'?'部分接入':'待建设'}}</span></article></section></template>
       <footer>Harbor-DL <span>个人媒体，自主掌握。 · MIT License</span></footer>

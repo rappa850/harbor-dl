@@ -1,5 +1,6 @@
 <script setup>
 import {ref,computed,watch,onMounted,onUnmounted} from 'vue'
+import HoverPreview from '../components/HoverPreview.vue'
 import Icon from '../components/Icon.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import {STATUS,statusLabel,duration,dateText} from './meta.js'
@@ -9,6 +10,13 @@ const PAGE=24
 const videos=ref(null),stats=ref(null),status=ref('all'),query=ref(''),page=ref(1),loading=ref(false),error=ref('')
 const selecting=ref(false),selected=ref(new Set()),menu=ref(null),busyIds=ref({}),batching=ref(false)
 const redownload=ref(null),removing=ref(null),working=ref(false),dialogError=ref('')
+async function exportLibrary(v){
+  try{
+    const r=await props.api(`${base.value}/videos/${v.id}/library`,'POST')
+    const poster={cache:'封面已缓存',thumbnail:'使用下载时的缩略图',remote:'已拉取封面',frame:'无封面，已用视频截帧代替'}[r.cover_source]||'没有封面'
+    props.notify(r.nfo_kept?'已导出（NFO 被手动修改过，保持原样）':`已导出到媒体库：${poster}`)
+  }catch(e){props.notify(e.message)}
+}
 const nfo=ref(null),cleanup=ref(null),residual=ref(true)
 let request=0,poll=null,typing=null
 const base=computed(()=>`/subscriptions/${props.item.id}`)
@@ -103,6 +111,7 @@ async function runCleanup(){
             <span class="badge status" :class="STATUS[v.status]?.tone">{{statusLabel(v)}}</span>
             <span v-if="isImage(v)" class="badge kind"><Icon name="image" :size="12"/> 图集</span>
             <span v-else-if="v.duration" class="badge time">{{duration(v.duration)}}</span>
+            <HoverPreview v-if="!selecting&&v.status==='downloaded'&&v.asset_id&&v.media_kind==='video'" :src="`/api/files/${v.asset_id}/stream`"/>
             <span v-if="selecting" class="pick" :class="{on:selected.has(v.id)}"><Icon name="check" :size="14"/></span>
             <div v-if="v.status==='downloading'" class="bar"><i :style="{width:Math.max(4,Math.min(100,v.task_progress||0))+'%'}"></i></div>
           </div>
@@ -118,6 +127,7 @@ async function runCleanup(){
                 <ul v-if="menu===v.id" class="menu" role="menu" @click.stop>
                   <li><a :href="v.url" target="_blank" rel="noopener noreferrer" role="menuitem" @click="menu=null"><Icon name="external" :size="14"/> 打开原作品</a></li>
                   <li v-if="v.status==='downloaded'&&v.asset_id"><button role="menuitem" @click="redownload=v;menu=null"><Icon name="download" :size="14"/> 重新下载</button></li>
+                  <li v-if="v.status==='downloaded'&&v.media_kind==='video'"><button role="menuitem" @click="exportLibrary(v)"><Icon name="folder" :size="14"/> 导出到媒体库</button></li>
                   <li v-if="v.status==='downloaded'"><button role="menuitem" @click="openNfo(v)"><Icon name="edit" :size="14"/> 编辑 NFO</button></li>
                   <li><button role="menuitem" class="danger" @click="removing=v;menu=null;dialogError=''"><Icon name="trash" :size="14"/> 从列表移除</button></li>
                 </ul></span>

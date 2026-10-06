@@ -37,6 +37,8 @@ class Store:
                     title TEXT NOT NULL, kind TEXT NOT NULL, is_primary INTEGER NOT NULL,
                     created_at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS media_assets_task ON media_assets(task_id);
+                CREATE TABLE IF NOT EXISTS library_exports (
+                    task_id TEXT PRIMARY KEY, folder TEXT NOT NULL, cover_source TEXT, exported_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS playback_records (
                     subscription_id TEXT PRIMARY KEY, current_index INTEGER NOT NULL DEFAULT 0,
                     playback_mode TEXT NOT NULL DEFAULT 'order', video_progress TEXT NOT NULL DEFAULT '{}',

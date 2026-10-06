@@ -9,8 +9,11 @@ import SettingsView from './subscriptions/SettingsView.vue'
 import {FILTERS,platformLabel,platformTone,intervalLabel,relative,count} from './subscriptions/meta.js'
 import './subscriptions/subscriptions.css'
 const props=defineProps({api:Function,notify:Function})
+import {route,go} from './router.js'
 const emit=defineEmits(['play'])
-const items=ref(null),loadError=ref(''),selectedId=ref(null),tab=ref('works'),search=ref(''),filter=ref('')
+// Selected author and tab live in the URL: /subscriptions/:id[/settings]
+const selectedId=computed(()=>route.sub||null),tab=computed({get:()=>route.tab||'works',set:v=>go({tab:v==='works'?'':v})})
+const items=ref(null),loadError=ref(''),search=ref(''),filter=ref('')
 const addOpen=ref(false),loginOpen=ref(false),importOpen=ref(false),removing=ref(null),removeBusy=ref(false),removeError=ref('')
 const checking=ref({}),syncing=ref({}),errors=ref({}),cookieSaved=ref(false),works=ref(null),moreOpen=ref(false)
 const progress=ref({}),importText=ref(''),importResult=ref(null),importBusy=ref(false)
@@ -21,7 +24,7 @@ function recall(){try{return localStorage.getItem('harbor.sub.selected')}catch(e
 async function load(){
   try{
     const list=(await props.api('/subscriptions')).items;items.value=list;loadError.value=''
-    if(!list.some(i=>i.id===selectedId.value))select(list.find(i=>i.id===recall())?.id||list[0]?.id||null)
+    if(!list.some(i=>i.id===selectedId.value))select(list.find(i=>i.id===recall())?.id||list[0]?.id||null,true)
   }catch(e){loadError.value=e.message;if(items.value===null)items.value=[]}
 }
 async function loadCookie(){try{cookieSaved.value=!!(await props.api('/network')).cookies?.douyin?.exists}catch(e){cookieSaved.value=false}}
@@ -42,7 +45,7 @@ function progressView(i){
   const count=p.total&&p.mode==='sync'?`已读取 ${p.fetched} / 约 ${p.total} 项`:`已读取 ${p.fetched} 项`
   return {text:`正在${verb} · ${count}${p.pages?`（第 ${p.pages} 页）`:''}`,pct}
 }
-function select(id){selectedId.value=id;remember(id);tab.value='works';moreOpen.value=false}
+function select(id,replace=false){remember(id);go({sub:id||'',tab:''},{replace});moreOpen.value=false}
 const selected=computed(()=>items.value?.find(i=>i.id===selectedId.value)||null)
 const visible=computed(()=>{
   const q=search.value.trim().toLowerCase(),f=FILTERS.find(x=>x.id===filter.value)
@@ -78,7 +81,7 @@ async function created(item){
 }
 async function confirmRemove(){
   removeBusy.value=true;removeError.value=''
-  try{await props.api(`/subscriptions/${removing.value.id}`,'DELETE');const name=removing.value.nickname;removing.value=null;selectedId.value=null;await load();props.notify(`已删除订阅「${name}」`)}
+  try{await props.api(`/subscriptions/${removing.value.id}`,'DELETE');const name=removing.value.nickname;removing.value=null;go({sub:'',tab:''},{replace:true});await load();props.notify(`已删除订阅「${name}」`)}
   catch(e){removeError.value=e.message}finally{removeBusy.value=false}
 }
 async function loggedIn(){await loadCookie();props.notify('抖音登录状态已保存，现在可以检查作品了')}

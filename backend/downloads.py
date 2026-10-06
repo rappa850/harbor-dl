@@ -27,6 +27,7 @@ class DownloadManager:
         self.assets.backfill()
         self.command_builder = command_builder or self.command
         self.running = {}
+        self.on_completed = None   # called with the task id once a task is COMPLETED and its files are registered
         self.resolvers = {}   # task source -> async (task, network) -> direct download target or None
         self.processes = {}
         self.wake = asyncio.Event()
@@ -216,6 +217,8 @@ class DownloadManager:
                     completed = dict(db.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone())
                     self.assets.register(db, completed)
                     self.event(db, task_id, 'COMPLETED', '下载完成，媒体文件可用')
+            if changed and self.on_completed:
+                self.on_completed(task_id)
         except Exception as exc:
             with self.store.connect() as db:
                 changed = db.execute('UPDATE tasks SET status=?,error=?,speed="",updated_at=? '

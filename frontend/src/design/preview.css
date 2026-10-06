@@ -1,0 +1,15 @@
+/* Hover preview layer (components/HoverPreview.vue). It sits over a cover; only its controls take the pointer. */
+.hp{position:absolute;inset:0;z-index:4;pointer-events:none;border-radius:inherit;overflow:hidden}
+.hp-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:var(--surface-ink)}
+.hp-bar{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;padding:var(--sp-24) var(--sp-8) var(--sp-24);background:linear-gradient(transparent,rgba(5,12,9,.68));pointer-events:auto}
+.hp-btn{width:28px;height:28px;border:0;border-radius:50%;background:rgba(5,12,9,.55);color:#fff;display:grid;place-items:center;cursor:pointer;padding:0;transition:background var(--dur-fast)}
+.hp-btn:hover{background:var(--brand)}
+.hp-track{position:absolute;left:0;right:0;bottom:0;height:20px;pointer-events:auto;cursor:pointer;touch-action:none}
+.hp-line{position:absolute;left:10px;right:10px;bottom:7px;height:3px;border-radius:2px;background:rgba(255,255,255,.28);transition:height var(--dur-fast)}
+.hp-line i{display:block;height:100%;border-radius:2px;background:var(--brand-text)}
+.hp-dot{position:absolute;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.5);transition:transform var(--dur-fast)}
+.hp-track:hover .hp-line,.hp-track.drag .hp-line{height:5px}
+.hp-track:hover .hp-dot,.hp-track.drag .hp-dot{transform:scale(1.25)}
+/* the cover's own corner badges step aside while a preview plays */
+.hp-on .badge,.hp-on .extension,.hp-on .stack,.hp-on .play-button,.hp-on .media-wave{opacity:0;transition:opacity var(--dur-fast)}
+.hp-on .badge.status{opacity:1}

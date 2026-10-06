@@ -20,6 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from .covers import CoverCache, key_for
+from .library_export import LibraryExporter, LibraryError, Skipped
+from .live_recording import ffmpeg_executable as library_ffmpeg
 from .imagesize import image_ratio
 from .downloads import DownloadManager, now
 from .store import Store
@@ -114,9 +116,17 @@ class PlaybackInput(BaseModel):
     video_progress: dict[str, Annotated[float, Field(ge=0, allow_inf_nan=False)]] = Field(default_factory=dict, max_length=5000)
 
 
+class LibrarySettings(BaseModel):
+    enabled: bool
+    auto: bool = True
+    delete_with_work: bool = False
+    root: str = Field(default='', max_length=1024)
+
+
 class SettingsInput(BaseModel):
     concurrency: int = Field(ge=1, le=8)
     sync_concurrency: int | None = Field(default=None, ge=1, le=3)
+    library: 'LibrarySettings | None' = None
 
 
 class TokenCreate(BaseModel):
@@ -169,7 +179,9 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     scheduler = SubscriptionScheduler(subscriptions,catalog,**(scheduler_options or {}))
     for adapter in set(registry.adapters.values()):
         for platform in adapter.platforms:manager.resolvers[platform]=adapter.download_target
-    nfo=SubscriptionNfo(store,manager)
+    library=LibraryExporter(store,manager,covers,library_ffmpeg(),data/'library',network)
+    nfo=SubscriptionNfo(store,manager,library)
+    manager.on_completed=library.completed
     browser=BrowserLogin(data,network,busy=lambda:len(catalog.active),**(browser_options or {}))
 
     @asynccontextmanager
@@ -187,10 +199,12 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             await live_monitor.stop()
             await live_recording.close()
             await manager.stop()
+            await library.close()
 
     app = FastAPI(title='Harbor-DL', version='0.1.0', lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store, app.state.manager = store, manager
+    app.state.library, app.state.covers = library, covers
     app.state.catalog=catalog
     app.state.scheduler=scheduler
     app.state.browser=browser
@@ -422,6 +436,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             db.execute('UPDATE media_assets SET task_id=NULL WHERE task_id=?', (task_id,))
             db.execute('DELETE FROM task_events WHERE task_id=?', (task_id,))
             db.execute('DELETE FROM tasks WHERE id=?', (task_id,))
+        library.forget(task_id)
         return {'ok': True}
 
     @app.get('/api/files')
@@ -435,6 +450,34 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             shown = covers.find(key_for(work_url)) if item['cover'] else (manager.assets.root / item['path'] if item['kind'] == 'image' else None)
             item['ratio'] = image_ratio(shown) if shown else None
         return {'items': items}
+
+    @app.post('/api/library/export')
+    async def library_export_all(overwrite: bool = False, account=Depends(user)):
+        try:
+            library.start_all(overwrite)
+        except LibraryError as exc:
+            raise HTTPException(409 if '正在' in str(exc) else 400, str(exc)) from exc
+        return library.progress()
+
+    @app.get('/api/library/export/progress')
+    def library_export_progress(account=Depends(user)):
+        return library.progress()
+
+    @app.post('/api/library/export/tasks/{task_id}')
+    async def library_export_task(task_id: str, overwrite: bool = False, account=Depends(user)):
+        try:
+            return await library.export_task(task_id, overwrite)
+        except Skipped as exc:
+            raise HTTPException(422, str(exc)) from exc
+        except LibraryError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/subscriptions/{subscription_id}/videos/{video_id}/library')
+    async def library_export_video(subscription_id: UUID, video_id: UUID, overwrite: bool = False, account=Depends(user)):
+        row = store.one('SELECT download_task_id FROM subscription_videos WHERE subscription_id=? AND id=?', (str(subscription_id), str(video_id)))
+        if not row or not row['download_task_id']:
+            raise HTTPException(404, '作品尚未下载')
+        return await library_export_task(row['download_task_id'], overwrite, account)
 
     @app.get('/api/covers/{key}')
     def cover(key: str, account=Depends(user)):
@@ -551,7 +594,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     @app.get('/api/settings')
     def settings(account=Depends(user)):
         return {'concurrency': int(store.one('SELECT value FROM settings WHERE key="concurrency"')['value']),
-                'sync_concurrency': catalog.sync_limit(),
+                'sync_concurrency': catalog.sync_limit(), 'library': library.config(),
                 'ffmpeg_available': shutil.which('ffmpeg') is not None, 'version': app.version}
 
     @app.get('/api/subscriptions')
@@ -780,6 +823,15 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             if payload.sync_concurrency is not None:
                 db.execute('INSERT INTO settings(key,value) VALUES ("sync_concurrency",?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                            (str(payload.sync_concurrency),))
+        if payload.library is not None:
+            lib = payload.library
+            try:
+                root = library.check_root(lib.root) if lib.enabled or lib.root else library.default_root
+            except LibraryError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            library.put('library_enabled', int(lib.enabled)); library.put('library_auto', int(lib.auto))
+            library.put('library_delete_with_work', int(lib.delete_with_work))
+            library.put('library_root', '' if str(root) == str(library.default_root.resolve()) else str(root))
         manager.wake.set()
         await catalog.gate.poke()
         return settings(account)
