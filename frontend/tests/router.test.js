@@ -13,7 +13,7 @@ test('parses pages, subscription and tab', () => {
 })
 
 test('builds the same path back', () => {
-  for (const url of ['/', '/tasks', '/subscriptions', '/subscriptions/a1', '/subscriptions/a1/settings', '/files?type=video&sort=big']) {
+  for (const url of ['/', '/tasks', '/profile', '/subscriptions', '/subscriptions/a1', '/subscriptions/a1/settings', '/files?type=video&sort=big']) {
     const [path, search] = url.split('?')
     assert.equal(build(parse(path, search ? '?' + search : '')), url)
   }

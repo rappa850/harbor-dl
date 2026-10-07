@@ -1,10 +1,10 @@
 // Minimal history router: one reactive `route`, no dependency. The backend already answers every non-API path with
 // index.html, so deep links and reloads work.
 //   /                     dashboard            /subscriptions/:id/:tab   one author, tab = settings (works is the default)
-//   /tasks  /live  /files  /roadmap  /settings   /files?type=video&q=…&sort=big&layout=phone
+//   /tasks  /live  /files  /roadmap  /settings  /profile   /files?type=video&q=…&sort=big&layout=phone
 import {reactive} from 'vue'
 
-export const PAGES = ['dashboard', 'tasks', 'subscriptions', 'live', 'files', 'roadmap', 'settings']
+export const PAGES = ['dashboard', 'tasks', 'subscriptions', 'live', 'logs', 'files', 'roadmap', 'settings', 'profile']
 export const SUB_TABS = ['settings']
 
 export function parse(pathname = '/', search = '') {

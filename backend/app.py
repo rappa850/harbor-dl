@@ -30,6 +30,7 @@ from .task_status import ACTIVE, ALL
 from .network import NetworkConfig
 from .player import PlaybackRecords, metadata, srt_to_vtt, subtitle_list
 from .task_query import TaskQuery
+from .logs import FailureLog
 from .api_tokens import ApiTokens
 from .subscriptions import Subscriptions, SubscriptionEdit, SubscriptionImport
 from .subscription_profiles import ProfileInput, ProfileResolver
@@ -71,6 +72,27 @@ class Credentials(BaseModel):
         if len(value) < 3:
             raise ValueError('用户名至少 3 个字符')
         return value
+
+
+class LoginInput(Credentials):
+    remember: bool = True
+
+
+class ProfileUpdate(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+
+    @field_validator('username')
+    @classmethod
+    def clean_username(cls, value):
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError('用户名至少 3 个字符')
+        return value
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
 
 
 class TaskInput(BaseModel):
@@ -164,6 +186,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     network = NetworkConfig(store)
     records = PlaybackRecords(store)
     task_query = TaskQuery(store, manager.assets)
+    failure_log = FailureLog(store)
     api_tokens = ApiTokens(store)
     subscriptions = Subscriptions(store)
     live_subscriptions=LiveSubscriptions(store)
@@ -251,14 +274,14 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             return account
         return session_user(request)
 
-    def set_session(response, account, request):
+    def set_session(response, account, request, remember=True):
         token = secrets.token_urlsafe(48)
         with store.connect() as db:
             db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
             db.execute('INSERT INTO sessions VALUES (?,?,?)',
-                       (hashlib.sha256(token.encode()).hexdigest(), account['id'], time.time() + 86400 * 7))
+                       (hashlib.sha256(token.encode()).hexdigest(), account['id'], time.time() + 86400 * (30 if remember else 1)))
         response.set_cookie(COOKIE, token, httponly=True, samesite='strict',
-                            secure=request.url.scheme == 'https', max_age=86400 * 7)
+                            secure=request.url.scheme == 'https', max_age=86400 * 30 if remember else None)
         return {'username': account['username']}
 
     @app.get('/api/setup/status')
@@ -278,18 +301,18 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         return set_session(response, account, request)
 
     @app.post('/api/auth/login')
-    def login(payload: Credentials, response: Response, request: Request):
+    def login(payload: LoginInput, response: Response, request: Request):
         account = store.one('SELECT * FROM users WHERE username=?', (payload.username,))
         # Run the same expensive hash path even for an unknown account.
         dummy = '0' * 32 + '$' + '0' * 64
         matched = password_matches(payload.password, account['password'] if account else dummy)
         if not account or not matched:
             raise HTTPException(401, '用户名或密码错误')
-        return set_session(response, account, request)
+        return set_session(response, account, request, payload.remember)
 
     @app.get('/api/auth/me')
     def me(account=Depends(user)):
-        return account
+        return {**account, 'avatar': avatar_version(account['id'])}
 
     @app.post('/api/auth/logout')
     def logout(request: Request, response: Response, account=Depends(session_user)):
@@ -298,6 +321,89 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             db.execute('DELETE FROM sessions WHERE token_hash=?', (hashlib.sha256(token.encode()).hexdigest(),))
         response.delete_cookie(COOKIE)
         return {'ok': True}
+
+    avatar_dir = data / 'avatars'
+    AVATAR_TYPES = {b'\x89PNG\r\n\x1a\n': ('png', 'image/png'), b'\xff\xd8\xff': ('jpg', 'image/jpeg')}
+
+    def avatar_file(user_id):
+        return next(iter(avatar_dir.glob(f'{user_id}.*')), None)
+
+    def avatar_version(user_id):
+        path = avatar_file(user_id)
+        return int(path.stat().st_mtime_ns // 1000) if path else None
+
+    def sniff_avatar(blob: bytes):
+        for magic, kind in AVATAR_TYPES.items():
+            if blob.startswith(magic):
+                return kind
+        if blob[:4] == b'RIFF' and blob[8:12] == b'WEBP':
+            return 'webp', 'image/webp'
+        return None
+
+    def session_hash(request: Request):
+        return hashlib.sha256(request.cookies.get(COOKIE, '').encode()).hexdigest()
+
+    @app.get('/api/auth/profile')
+    def profile(request: Request, account=Depends(session_user)):
+        row = store.one('SELECT username,created_at FROM users WHERE id=?', (account['id'],))
+        sessions = store.one('SELECT COUNT(*) AS n FROM sessions WHERE user_id=? AND expires>?', (account['id'], time.time()))['n']
+        return {'username': row['username'], 'created_at': row['created_at'], 'active_sessions': sessions,
+                'api_tokens': len(api_tokens.list(account['id'])), 'avatar': avatar_version(account['id'])}
+
+    @app.get('/api/auth/avatar')
+    def get_avatar(account=Depends(session_user)):
+        path = avatar_file(account['id'])
+        if not path:
+            raise HTTPException(404, '尚未设置头像')
+        kind = sniff_avatar(path.read_bytes()[:16])
+        return FileResponse(path, media_type=kind[1] if kind else 'application/octet-stream',
+                            headers={'Cache-Control': 'private, max-age=31536000, immutable'})
+
+    @app.put('/api/auth/avatar')
+    async def put_avatar(request: Request, account=Depends(session_user)):
+        blob = await request.body()
+        if len(blob) > 2 * 1024 * 1024:
+            raise HTTPException(413, '头像不能超过 2 MB')
+        kind = sniff_avatar(blob)
+        if not kind:
+            raise HTTPException(415, '头像仅支持 PNG、JPEG 或 WebP 图片')
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        for old in avatar_dir.glob(f"{account['id']}.*"):
+            old.unlink()
+        (avatar_dir / f"{account['id']}.{kind[0]}").write_bytes(blob)
+        return {'avatar': avatar_version(account['id'])}
+
+    @app.delete('/api/auth/avatar')
+    def delete_avatar(account=Depends(session_user)):
+        for old in avatar_dir.glob(f"{account['id']}.*"):
+            old.unlink()
+        return {'avatar': None}
+
+    @app.patch('/api/auth/profile')
+    def update_profile(payload: ProfileUpdate, account=Depends(session_user)):
+        try:
+            with store.connect() as db:
+                db.execute('UPDATE users SET username=? WHERE id=?', (payload.username, account['id']))
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(409, '用户名已被使用') from exc
+        return {'username': payload.username}
+
+    @app.post('/api/auth/password')
+    def change_password(payload: PasswordChange, request: Request, account=Depends(session_user)):
+        row = store.one('SELECT password FROM users WHERE id=?', (account['id'],))
+        if not password_matches(payload.current_password, row['password']):
+            raise HTTPException(403, '当前密码不正确')
+        with store.connect() as db:
+            db.execute('UPDATE users SET password=? WHERE id=?', (password_hash(payload.new_password), account['id']))
+            db.execute('DELETE FROM sessions WHERE user_id=? AND token_hash<>?', (account['id'], session_hash(request)))
+        return {'ok': True}
+
+    @app.post('/api/auth/sessions/revoke-others')
+    def revoke_other_sessions(request: Request, account=Depends(session_user)):
+        with store.connect() as db:
+            removed = db.execute('DELETE FROM sessions WHERE user_id=? AND token_hash<>?',
+                                 (account['id'], session_hash(request))).rowcount
+        return {'revoked': removed}
 
     @app.get('/api/auth/tokens')
     def tokens(account=Depends(session_user)):
@@ -324,6 +430,15 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     def delete_token(token_id: UUID,account=Depends(session_user)):
         if not api_tokens.delete(str(token_id),account['id']):raise HTTPException(404,'API Token 不存在')
         return {'ok':True}
+
+    @app.get('/api/logs')
+    def failure_logs(source: str = '', query: str = Query(default='', max_length=512),
+                     limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0),
+                     account=Depends(user)):
+        try:
+            return failure_log.list(source, query, limit, offset)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get('/api/dashboard')
     def dashboard(account=Depends(user)):

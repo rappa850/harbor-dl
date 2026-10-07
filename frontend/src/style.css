@@ -63,3 +63,4 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:0}
 .settings form input[type=number]{width:120px}
 .settings form label:has(>input[type=checkbox]){flex-direction:row;align-items:center}
 .settings form>*+*{margin-top:var(--sp-12)}
+.account .account-link{margin-left:0;font-size:inherit}.account-link{display:flex;align-items:center;gap:var(--sp-8);text-align:left;min-width:0;flex:1;padding:var(--sp-4);border-radius:var(--r-md);font-size:inherit}.account-link:hover,.account-link.selected{background:var(--surface-2)}.account-link>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

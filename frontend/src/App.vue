@@ -2,6 +2,9 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import SubscriptionPanel from './SubscriptionPanel.vue'
 import LivePanel from './LivePanel.vue'
+import ProfileView from './ProfileView.vue'
+import LogPanel from './LogPanel.vue'
+import Avatar from './components/Avatar.vue'
 import GalleryPlayer from './components/GalleryPlayer.vue'
 import MediaPlayer from './components/MediaPlayer.vue'
 import LibraryView from './library/LibraryView.vue'
@@ -13,7 +16,12 @@ import {applyTheme,getTheme,nextTheme,themeLabel} from './design/theme.js'
 import {resumeTime,playbackIndex} from './playback-policy.js'
 
 const account = ref(null), needsSetup = ref(false), booting = ref(true), busy = ref(false)
-const username = ref(''), password = ref(''), error = ref(''), notice = ref('')
+const REMEMBER_KEY='harbor.login'
+function savedLogin(){try{return JSON.parse(localStorage.getItem(REMEMBER_KEY))||{}}catch{return{}}}
+function storeLogin(remember,name){try{remember?localStorage.setItem(REMEMBER_KEY,JSON.stringify({username:name,remember:true})):localStorage.setItem(REMEMBER_KEY,JSON.stringify({remember:false}))}catch{}}
+const remembered=savedLogin()
+const remember = ref(remembered.remember!==false)
+const username = ref(remembered.username||''), password = ref(''), error = ref(''), notice = ref('')
 const page = computed({get:()=>route.page,set:v=>go({page:v})}), url = ref(''), taskTitle = ref(''), filter = ref(''), query = ref('')
 const tasks = ref([]), files = ref([]), stats = ref({counts:{},disk:{},recent_tasks:[]})
 const settings = ref({concurrency:2,sync_concurrency:1,library:{enabled:false,auto:true,delete_with_work:false,root:'',default_root:''}}), capabilities = ref([]), selectedTask = ref(null), playing = ref(null)
@@ -73,9 +81,11 @@ const platformNames = {youtube:'YouTube',bilibili:'哔哩哔哩',douyin:'抖音'
 const nav = [{id:'dashboard',icon:'◈',name:'概览'}, {id:'tasks',icon:'↓',name:'下载任务'},
              {id:'subscriptions',icon:'↻',name:'作者订阅'},
              {id:'live',icon:'◉',name:'直播配置'},
-             {id:'files',icon:'▦',name:'媒体库'}, {id:'roadmap',icon:'◇',name:'功能进度'}, {id:'settings',icon:'⚙',name:'设置'}]
+             {id:'files',icon:'▦',name:'媒体库'}, {id:'logs',icon:'≡',name:'日志'}, {id:'roadmap',icon:'◇',name:'功能进度'}, {id:'settings',icon:'⚙',name:'设置'}]
+const pageTitles={profile:'个人信息'}
+const pageName=id=>nav.find(n=>n.id===id)?.name||pageTitles[id]||''
 watch(page,value=>{if(value==='settings'&&account.value)pollLibrary()},{immediate:false})
-watch(page,value=>{document.title=`${nav.find(n=>n.id===value)?.name||'Harbor-DL'} · Harbor-DL`},{immediate:true})
+watch(page,value=>{document.title=`${pageName(value)||'Harbor-DL'} · Harbor-DL`},{immediate:true})
 const labels = {PENDING:'排队中',DOWNLOADING:'下载中',PROCESSING:'处理中',COMPLETED:'已完成',ERROR:'失败',CANCELLED:'已取消'}
 const taskPage = ref(1), taskTotal = ref(0), taskPlatform = ref(''), manualOnly = ref(false), orphanOnly = ref(false)
 const visibleTasks = computed(() => tasks.value)
@@ -89,7 +99,7 @@ function size(n) { if (!n) return '0 B'; const i=Math.min(4,Math.floor(Math.log(
 function date(s) { return s ? new Date(s).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—' }
 function toast(message) { notice.value=message;clearTimeout(notificationTimer);notificationTimer=setTimeout(()=>notice.value='',4000) }
 async function api(path, method='GET', body) {
-  const response=await fetch(`/api${path}`,{method,credentials:'same-origin',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined})
+  const response=await fetch(`/api${path}`,{method,credentials:'same-origin',headers:body instanceof Blob?{'Content-Type':body.type}:body?{'Content-Type':'application/json'}:{},body:body instanceof Blob?body:body?JSON.stringify(body):undefined})
   const value=await response.json().catch(()=>({detail:'服务响应异常'}))
   if(!response.ok) {
     if(response.status===401 && account.value) { account.value=null;closePlayer();password.value='';cookieInput.value='';proxyInput.value='';rawToken.value='';tokenAction.value=null;tokenItems.value=[];selectedTask.value=null;deleting.value=null;tasks.value=[];files.value=[] }
@@ -121,7 +131,7 @@ async function enter() {
 }
 async function authenticate() {
   busy.value=true;error.value=''
-  try { account.value=await api(needsSetup.value?'/setup':'/auth/login','POST',{username:username.value,password:password.value});needsSetup.value=false;password.value='';await enter() }
+  try { account.value=await api(needsSetup.value?'/setup':'/auth/login','POST',{username:username.value,password:password.value,remember:remember.value});storeLogin(remember.value,username.value);needsSetup.value=false;password.value='';await enter() }
   catch(e) { error.value=e.message; if(needsSetup.value) { try {needsSetup.value=(await api('/setup/status')).needs_setup}catch{} } }
   finally {busy.value=false}
 }
@@ -261,15 +271,18 @@ onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);c
   <div v-if="booting" class="boot">正在连接媒体工作台…</div>
   <main v-else-if="!account" class="auth-page">
     <div class="auth-story"><div class="brand"><span class="brand-mark">H</span> Harbor-DL <span class="tag">OPEN</span></div><div><p class="eyebrow">YOUR MEDIA, YOUR SPACE</p><h1>把喜欢的内容，<br>留在自己的空间。</h1><p>下载、收藏、播放。<br>一个开放的媒体工作台，重新开始。</p></div><span class="auth-footer">开源 · MIT License · 自主部署</span></div>
-    <form class="auth-form" @submit.prevent="authenticate"><p class="eyebrow">{{needsSetup?'WELCOME HOME':'WELCOME BACK'}}</p><h2>{{needsSetup?'创建你的工作台':'登录工作台'}}</h2><p>{{needsSetup?'首次使用，请设置管理员账号。':'继续管理你的媒体收藏。'}}</p><label>用户名<input v-model="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="你的用户名"></label><label>密码<input v-model="password" type="password" required minlength="10" maxlength="256" :autocomplete="needsSetup?'new-password':'current-password'" placeholder="至少 10 个字符"></label><p v-if="error" class="error" role="alert">{{error}}</p><button class="primary" :disabled="busy">{{busy?'请稍候…':needsSetup?'创建并进入':'登录'}}</button><span class="hint">所有功能开放，无需商业授权密钥。</span></form>
+    <form class="auth-form" @submit.prevent="authenticate"><p class="eyebrow">{{needsSetup?'WELCOME HOME':'WELCOME BACK'}}</p><h2>{{needsSetup?'创建你的工作台':'登录工作台'}}</h2><p>{{needsSetup?'首次使用，请设置管理员账号。':'继续管理你的媒体收藏。'}}</p><label>用户名<input v-model="username" required minlength="3" maxlength="64" autocomplete="username" placeholder="你的用户名"></label><label>密码<input v-model="password" type="password" required minlength="10" maxlength="256" :autocomplete="needsSetup?'new-password':'current-password'" placeholder="至少 10 个字符"></label><label class="download-option"><input type="checkbox" v-model="remember"><span>记住登录信息<small>30 天内免登录，并记住用户名；公用电脑请取消勾选</small></span></label><p v-if="error" class="error" role="alert">{{error}}</p><button class="primary" :disabled="busy">{{busy?'请稍候…':needsSetup?'创建并进入':'登录'}}</button><span class="hint">所有功能开放，无需商业授权密钥。</span></form>
   </main>
   <div v-else class="workspace">
-    <aside class="sidebar"><div class="brand"><span class="brand-mark">H</span><div>Harbor-DL<small>OPEN EDITION</small></div></div><p class="nav-label">工作台</p><nav><button v-for="item in nav" :key="item.id" :class="{selected:page===item.id}" @click="page=item.id;query=''" :aria-current="page===item.id?'page':undefined"><span>{{item.icon}}</span>{{item.name}}<b v-if="item.id==='tasks' && active">{{active}}</b></button></nav><div class="sidebar-bottom"><div class="license-dot">MIT 开源版</div><span>从收藏，到自己的媒体库。</span><button class="theme-toggle" @click="cycleTheme" :title="`主题：${themeLabel[theme]}`" :aria-label="`切换主题，当前${themeLabel[theme]}`"><Icon :name="theme==='dark'?'moon':theme==='light'?'sun':'monitor'" :size="15"/>{{themeLabel[theme]}}</button><div class="account"><span class="avatar">{{account.username.slice(0,1).toUpperCase()}}</span><span>{{account.username}}<small>管理员</small></span><button @click="logout" aria-label="退出登录" title="退出登录">↗</button></div></div></aside>
+    <aside class="sidebar"><div class="brand"><span class="brand-mark">H</span><div>Harbor-DL<small>OPEN EDITION</small></div></div><p class="nav-label">工作台</p><nav><button v-for="item in nav" :key="item.id" :class="{selected:page===item.id}" @click="page=item.id;query=''" :aria-current="page===item.id?'page':undefined"><span>{{item.icon}}</span>{{item.name}}<b v-if="item.id==='tasks' && active">{{active}}</b></button></nav><div class="sidebar-bottom"><div class="license-dot">MIT 开源版</div><span>从收藏，到自己的媒体库。</span><button class="theme-toggle" @click="cycleTheme" :title="`主题：${themeLabel[theme]}`" :aria-label="`切换主题，当前${themeLabel[theme]}`"><Icon :name="theme==='dark'?'moon':theme==='light'?'sun':'monitor'" :size="15"/>{{themeLabel[theme]}}</button><div class="account"><button class="account-link" :class="{selected:page==='profile'}" @click="page='profile';query=''" title="个人信息" :aria-current="page==='profile'?'page':undefined"><Avatar :name="account.username" :version="account.avatar"/><span>{{account.username}}<small>管理员 · 个人信息</small></span></button><button @click="logout" aria-label="退出登录" title="退出登录">↗</button></div></div></aside>
     <main class="content">
-      <header><div><p class="eyebrow">MEDIA WORKSPACE / {{page.toUpperCase()}}</p><h1>{{nav.find(n=>n.id===page)?.name}}</h1></div><button class="primary" @click="openDownload">＋ 新建下载</button></header>
+      <header><div><p class="eyebrow">MEDIA WORKSPACE / {{page.toUpperCase()}}</p><h1>{{pageName(page)}}</h1></div><button class="primary" @click="openDownload">＋ 新建下载</button></header>
       <div v-if="connectionError" class="error connection" role="alert">连接异常：{{connectionError}} <button @click="refresh">重试</button></div>
+      <LogPanel v-if="page==='subscriptions'" :api="api" :notify="toast" source="subscription" embedded />
       <SubscriptionPanel v-if="page==='subscriptions'" :api="api" :notify="toast" @play="openSubscriptionPlayer" />
+      <LogPanel v-if="page==='live'" :api="api" :notify="toast" source="live" embedded />
       <LivePanel v-if="page==='live'" :api="api" :notify="toast" />
+      <ProfileView v-if="page==='profile'" :api="api" :notify="toast" @renamed="account.username=$event" @avatar="account.avatar=$event" />
 
       <template v-if="page==='dashboard'">
         <section class="welcome"><div><span class="tag">自由收藏 · 自主保存</span><h2>你的媒体，正在这里汇集。</h2><p>粘贴一个链接开始下载，让喜欢的内容随时可用。</p><form class="quick-form" @submit.prevent="parseMedia"><input v-model="url" required placeholder="粘贴链接或分享文本" aria-label="媒体链接"><button class="primary" :disabled="busy">{{busy?'提交中…':'解析链接 →'}}</button></form></div><div class="welcome-art" aria-hidden="true"><div class="art-ring"></div><span class="art-play">▶</span><span class="art-card c1">↓ &nbsp;保存喜欢</span><span class="art-card c2">♫ &nbsp;随时播放</span></div></section>
@@ -278,7 +291,9 @@ onUnmounted(()=>{saveCurrent();clearInterval(progressPoll);clearInterval(poll);c
         <div class="open-note"><span>◇</span><p><strong>从现在起，开放每一种可能。</strong><br>订阅、直播与通知功能正在逐步加入。</p><button class="text-button" @click="page='roadmap'">查看功能进度 →</button></div>
       </template>
 
+      <LogPanel v-if="page==='logs'" :api="api" :notify="toast" />
       <template v-if="page==='tasks'">
+        <LogPanel :api="api" :notify="toast" source="task" embedded />
         <section class="panel"><div class="toolbar"><div class="tabs"><button @click="filter=''" :class="{active:!filter}">全部</button><button @click="filter='active'" :class="{active:filter==='active'}">进行中</button><button v-for="(label,key) in labels" :key="key" @click="filter=key" :class="{active:filter===key}">{{label}}</button></div><input v-model="query" class="search" placeholder="搜索标题、文件名或作者…" aria-label="搜索任务"></div><div class="task-filters"><label>平台<select v-model="taskPlatform"><option value="">全部平台</option><option v-for="(name,key) in platformNames" :key="key" :value="key">{{name}}</option></select></label><label class="download-option"><input type="checkbox" v-model="manualOnly">仅手动任务</label><label class="download-option"><input type="checkbox" v-model="orphanOnly">仅文件缺失</label><span>共 {{taskTotal}} 项</span></div><div v-if="!visibleTasks.length" class="empty"><span>↓</span><h3>{{tasks.length?'没有符合条件的任务':'还没有下载任务'}}</h3><p>{{tasks.length?'试试其他状态或关键词。':'点击新建下载，保存你的第一份媒体。'}}</p></div><article v-for="t in visibleTasks" :key="t.id" class="task-row"><span class="file-icon">↓</span><div class="task-info"><button class="task-title" @click="detail(t)">{{t.title}}</button><p class="url">{{t.url}}</p><div v-if="t.status==='DOWNLOADING'" class="progress"><span :style="{width:t.progress+'%'}"></span></div><p class="task-meta">{{date(t.created_at)}} <template v-if="t.status==='DOWNLOADING'"> · {{t.total?t.progress.toFixed(1)+'%':'正在获取媒体'}} · {{size(t.downloaded)}}<template v-if="t.total"> / {{size(t.total)}}</template> · {{t.speed||'准备中'}}</template></p><p v-if="t.error" class="task-error">{{t.error}}</p></div><div class="task-actions"><span :class="['status',t.status]">{{labels[t.status]}}</span><div><button v-if="['PENDING','DOWNLOADING','PROCESSING'].includes(t.status)" @click="action(t,'cancel')">取消</button><button v-if="['ERROR','CANCELLED'].includes(t.status)" @click="action(t,'retry')">重试</button><a v-if="t.status==='COMPLETED'" :href="`/api/files/${t.id}/download`">保存</a><button v-if="!['PENDING','DOWNLOADING','PROCESSING'].includes(t.status)" class="danger-text" @click="deleteMedia=true;deleteRelated=true;deleting=t">删除</button></div></div></article><div class="task-pagination"><button :disabled="taskPage<=1" @click="taskPage--">上一页</button><span>第 {{taskPage}} / {{taskPages}} 页</span><button :disabled="taskPage>=taskPages" @click="taskPage++">下一页</button></div></section><p class="hint">每页 24 项，筛选和搜索覆盖全部任务。</p>
       </template>
 
