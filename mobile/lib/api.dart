@@ -27,16 +27,33 @@ class FeedItem {
 }
 
 class Blogger {
-  Blogger(this.author, this.count, this.avatar, this.signature, this.platform, this.followers);
+  Blogger(this.author, this.count, this.avatar, this.signature, this.platform, this.followers, {this.remote = 0});
 
   final String author, signature, platform;
-  final int count;
+
+  /// Downloaded (playable) videos, and synced works still on the platform only.
+  final int count, remote;
   final String? avatar;
   final int? followers;
 
   factory Blogger.fromJson(Map<String, dynamic> j) => Blogger(
       j['author'] as String, j['count'] as int, j['avatar'] as String?, (j['signature'] ?? '') as String,
-      (j['platform'] ?? '') as String, j['followers'] as int?);
+      (j['platform'] ?? '') as String, j['followers'] as int?, remote: (j['remote'] ?? 0) as int);
+}
+
+/// A synced work that is not on the server yet. It can be requested for download but never plays.
+class RemoteWork {
+  RemoteWork(this.id, this.subscriptionId, this.title, this.cover, this.duration, this.status);
+
+  final String id, subscriptionId, title;
+  final String? cover;
+  final num? duration;
+
+  /// not_downloaded | downloading | failed | cancelled | orphaned
+  String status;
+
+  factory RemoteWork.fromJson(Map<String, dynamic> j) => RemoteWork(j['id'] as String, j['subscription_id'] as String,
+      (j['title'] ?? '') as String, j['cover'] as String?, j['duration'] as num?, j['status'] as String);
 }
 
 /// What the profile tab shows. [avatar] and [background] are cache-busting versions, null when not set.
@@ -163,6 +180,22 @@ class Api {
         final response = await _dio.get('/api/blogger', queryParameters: {'author': author});
         return Blogger.fromJson(response.data as Map<String, dynamic>);
       });
+
+  Future<List<RemoteWork>> works(String author) => _read(() async {
+        final response = await _dio.get('/api/blogger/works', queryParameters: {'author': author});
+        return [for (final raw in response.data['items'] as List) RemoteWork.fromJson(raw as Map<String, dynamic>)];
+      });
+
+  /// Ask the server to download a synced work. A work that is already queued counts as success.
+  Future<void> downloadWork(RemoteWork work) async {
+    try {
+      await _dio.post('/api/subscriptions/${work.subscriptionId}/videos/${work.id}/download', data: {'redownload': false});
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) throw Unauthorized();
+      if (e.response?.statusCode == 409) return;
+      throw '提交下载失败，请检查网络';
+    }
+  }
 
   Future<Me> me() => _read(() async => Me.fromJson((await _dio.get('/api/app/me')).data as Map<String, dynamic>));
 

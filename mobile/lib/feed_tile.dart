@@ -22,6 +22,8 @@ class VideoTile extends StatefulWidget {
       this.saved = false,
       this.saving = false,
       this.onSave,
+      this.loop = false,
+      this.onLoop,
       this.bare = false,
       this.onPip});
 
@@ -40,6 +42,10 @@ class VideoTile extends StatefulWidget {
 
   /// Only the picture, for the picture-in-picture window; [onPip] shrinks the app into it (null hides the button).
   final bool bare;
+
+  /// Single-video loop (true) or automatic continuation (false); [onLoop] switches between them.
+  final bool loop;
+  final VoidCallback? onLoop;
   final VoidCallback? onPip;
 
   @override
@@ -150,6 +156,12 @@ class _VideoTileState extends State<VideoTile> {
                     icon: widget.saving
                         ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                         : Icon(widget.saved ? Icons.download_done : Icons.download_outlined, color: widget.saved ? Colors.lightGreenAccent : Colors.white)),
+              if (widget.onLoop != null)
+                IconButton(
+                    iconSize: 30,
+                    tooltip: widget.loop ? '单曲循环（点击切换为自动连播）' : '自动连播（点击切换为单曲循环）',
+                    onPressed: widget.onLoop,
+                    icon: Icon(widget.loop ? Icons.repeat_one : Icons.playlist_play, color: widget.loop ? Colors.amberAccent : Colors.white)),
               if (widget.onPip != null)
                 IconButton(
                     iconSize: 30,

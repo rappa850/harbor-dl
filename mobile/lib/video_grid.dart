@@ -7,13 +7,16 @@ import 'widgets.dart';
 /// Paged three-column grid of cover images. Tapping one hands the loaded items to [onOpen] so the full-screen feed can
 /// start right there and keep paging. Scrolls with the primary controller, so it works inside a NestedScrollView.
 class VideoGrid extends StatefulWidget {
-  const VideoGrid({super.key, required this.api, required this.mode, required this.emptyText, required this.onOpen, this.author = '', this.refresh = 0});
+  const VideoGrid({super.key, required this.api, required this.mode, required this.emptyText, required this.onOpen, this.author = '', this.refresh = 0, this.trailing = const []});
 
   final Api api;
   final String mode, author, emptyText;
 
   /// Changing this value reloads the grid (the parent bumps it when the tab is shown again).
   final int refresh;
+
+  /// Extra slivers after the grid (the blogger page lists works that are not downloaded here).
+  final List<Widget> trailing;
   final Future<void> Function(FeedSeed seed) onOpen;
 
   @override
@@ -88,7 +91,12 @@ class _VideoGridState extends State<VideoGrid> with AutomaticKeepAliveClientMixi
         return false;
       },
       child: CustomScrollView(slivers: [
-        if (_items.isEmpty)
+        if (_items.isEmpty && widget.trailing.isNotEmpty && !_loading)
+          SliverToBoxAdapter(
+              child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Center(child: Text(_error ?? widget.emptyText, style: const TextStyle(color: Colors.white54)))))
+        else if (_items.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
             child: Center(
@@ -135,6 +143,7 @@ class _VideoGridState extends State<VideoGrid> with AutomaticKeepAliveClientMixi
           ),
         if (_items.isNotEmpty && _loading)
           const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))),
+        ...widget.trailing,
       ]),
     );
   }

@@ -2,10 +2,12 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'api.dart';
 import 'feed_tile.dart';
 import 'pip.dart';
+import 'settings.dart';
 import 'video_cache.dart';
 
 /// How many neighbours on each side keep a prepared (initialised, paused) player.
@@ -64,7 +66,8 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   bool _loading = false, _done = false, _paused = false, _fast = false, _held = false;
   late int _index = widget.initial?.index ?? 0;
   late final String _seed = DateTime.now().millisecondsSinceEpoch.toString();
-  bool _pipSupported = false;
+  bool _pipSupported = false, _loaded = false, _loop = false, _advancing = false;
+  AppSettings? _settings;
 
   @override
   void initState() {
@@ -84,6 +87,12 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   }
 
   Future<void> _start() async {
+    try {
+      _settings = await AppSettings.load();
+      _loop = _settings!.loopOne;
+    } catch (_) {
+      // defaults apply
+    }
     try {
       _cache = await VideoCache.open(widget.api.session);
     } catch (_) {
@@ -110,7 +119,14 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   /// The system may shrink the app into a window only while this feed is on top and a video is playing.
   void _allowPip() {
     final player = _players[_index];
-    Pip.allow(mounted && widget.active && !_held && !_paused && player != null && player.value.isInitialized);
+    final playing = mounted && widget.active && !_held && !_paused && player != null && player.value.isInitialized;
+    Pip.allow(playing);
+    // keep the screen on exactly while a video is meant to be playing
+    try {
+      WakelockPlus.toggle(enable: playing);
+    } catch (_) {
+      // not available (tests, unsupported platform)
+    }
   }
 
   /// Pause while something covers the feed (another tab, the author page); resume afterwards unless the user paused.
@@ -139,6 +155,9 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   void dispose() {
     _report(_index);
     Pip.allow(false);
+    try {
+      WakelockPlus.disable();
+    } catch (_) {}
     Pip.inPip.removeListener(_onPip);
     WidgetsBinding.instance.removeObserver(this);
     for (final player in _players.values) {
@@ -181,7 +200,12 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loaded = true;
+        });
+      }
     }
   }
 
@@ -222,7 +246,8 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
         : VideoPlayerController.networkUrl(Uri.parse(widget.api.session.url(item.stream)),
             httpHeaders: widget.api.session.headers, videoPlayerOptions: options);
     _players[i] = controller;
-    controller.setLooping(true);
+    controller.setLooping(_loop);
+    controller.addListener(() => _ended(i, controller));
     try {
       await controller.initialize();
     } catch (_) {
@@ -246,6 +271,27 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     if (player == null || !player.value.isInitialized || i >= _items.length) return;
     final position = player.value.position;
     if (position >= kHistoryAfter) widget.api.watched(_items[i].id, position.inSeconds);
+  }
+
+  /// Without single-video looping the feed moves on by itself when the current video finishes.
+  void _ended(int i, VideoPlayerController controller) {
+    if (_loop || _advancing || i != _index || _players[i] != controller || !controller.value.isCompleted) return;
+    _advancing = true;
+    if (i + 1 < _items.length) {
+      _pages.nextPage(duration: const Duration(milliseconds: 320), curve: Curves.easeOut).whenComplete(() => _advancing = false);
+    } else {
+      // nothing further: start over rather than sit on the last frame
+      controller.seekTo(Duration.zero).then((_) => controller.play()).whenComplete(() => _advancing = false);
+    }
+  }
+
+  void _toggleLoop() {
+    setState(() => _loop = !_loop);
+    for (final player in _players.values) {
+      player.setLooping(_loop);
+    }
+    _settings?.setLoopOne(_loop);
+    _say(_loop ? '单曲循环' : '自动连播');
   }
 
   Future<void> _favorite(FeedItem item, bool on) async {
@@ -313,6 +359,16 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final header = widget.header;
+    if (_items.isEmpty && !_loaded) {
+      // first load still running: only the spinner (and the tabs), never the "nothing here" state
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(children: [
+          const Center(child: CircularProgressIndicator()),
+          if (header != null) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),
+        ]),
+      );
+    }
     if (_items.isEmpty) {
       return Scaffold(
         backgroundColor: Colors.black,
@@ -322,9 +378,11 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
                 ? const CircularProgressIndicator()
                 : Column(mainAxisSize: MainAxisSize.min, children: [
                     Text(_error ?? _emptyText, style: const TextStyle(color: Colors.white70)),
-                    const SizedBox(height: 12),
-                    FilledButton(onPressed: _more, child: const Text('重试')),
-                    TextButton(onPressed: widget.onLogout, child: const Text('切换账号')),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      FilledButton(onPressed: _more, child: const Text('重试')),
+                      TextButton(onPressed: widget.onLogout, child: const Text('切换账号')),
+                    ],
                   ]),
           ),
           // keep the tabs reachable even when this mode has nothing to show
@@ -352,6 +410,8 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
                 onSpeed: _speed,
                 saved: _cache?.offline?.has(_items[i].id) ?? false,
                 saving: _cache?.offline?.downloading(_items[i].id) ?? false,
+                loop: _loop,
+                onLoop: _toggleLoop,
                 bare: Pip.inPip.value,
                 onPip: _pipSupported ? Pip.enter : null,
                 onSave: _cache?.offline == null ? null : () => _save(_items[i]),

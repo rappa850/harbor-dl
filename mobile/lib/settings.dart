@@ -16,6 +16,10 @@ class AppSettings {
   bool get wifiOnlyPrefetch => _prefs.getBool('wifiOnlyPrefetch') ?? true;
   Future<void> setWifiOnlyPrefetch(bool value) => _prefs.setBool('wifiOnlyPrefetch', value);
 
+  /// Repeat the current video instead of moving on to the next when it ends.
+  bool get loopOne => _prefs.getBool('loopOne') ?? false;
+  Future<void> setLoopOne(bool value) => _prefs.setBool('loopOne', value);
+
   int get cacheMb => _prefs.getInt('cacheMb') ?? 1024;
   Future<void> setCacheMb(int value) => _prefs.setInt('cacheMb', value);
 

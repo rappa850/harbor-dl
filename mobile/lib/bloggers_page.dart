@@ -139,7 +139,8 @@ class _BloggersPageState extends State<BloggersPage> {
                           itemBuilder: (context, i) {
                             final blogger = items[i];
                             final meta = [
-                              '${blogger.count} 个作品',
+                              '${blogger.count} 个视频',
+                              if (blogger.remote > 0) '${blogger.remote} 个未下载',
                               if (blogger.followers != null) '${formatCount(blogger.followers!)} 粉丝',
                               if (blogger.platform.isNotEmpty) platformLabel(blogger.platform),
                             ].join(' · ');

@@ -38,6 +38,16 @@ class BloggerTests(unittest.TestCase):
             db.execute("INSERT INTO subscriptions VALUES (?,?,?,?,?)",
                        (f'sub-{nickname}', f'douyin:{nickname}', json.dumps(config), 'now', 'now'))
 
+    def work(self, nickname, vid, title, published, task=None, downloaded=0):
+        meta = {'title': title, 'url': f'https://example.org/{vid}', 'duration': 30, 'publish_time': published}
+        with self.app.state.store.connect() as db:
+            db.execute('INSERT INTO subscription_videos(id,subscription_id,video_id,metadata,downloaded,download_task_id,'
+                       'created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+                       (f'row-{vid}', f'sub-{nickname}', vid, json.dumps(meta), downloaded, task, 'now', 'now'))
+
+    def task_of(self, author):
+        return self.app.state.store.one('SELECT id FROM tasks WHERE author=?', (author,))['id']
+
     def items(self, **params):
         response = self.client.get('/api/bloggers', params=params)
         self.assertEqual(response.status_code, 200, response.text)
@@ -88,6 +98,29 @@ class BloggerTests(unittest.TestCase):
         self.assertEqual((found.status_code, found.json()['count'], found.json()['signature']), (200, 1, 'hi'))
         self.assertEqual(self.client.get('/api/blogger', params={'author': 'nobody'}).status_code, 404)
         self.assertEqual(self.client.get('/api/blogger').status_code, 422)
+
+    def test_synced_but_not_downloaded_works_are_listed_apart_from_playable_ones(self):
+        self.add('a1', 'alice', '2026-01-01T00:00:00+00:00')
+        self.subscribe('alice')
+        self.work('alice', 'v1', 'downloaded one', '2026-01-02T00:00:00+00:00', task=self.task_of('alice'), downloaded=1)
+        self.work('alice', 'v2', 'remote old', '2026-01-03T00:00:00+00:00')
+        self.work('alice', 'v3', 'remote new', '2026-01-04T00:00:00+00:00')
+        self.subscribe('dave')
+        self.work('dave', 'd1', 'only remote', '2026-02-01T00:00:00+00:00')
+        self.subscribe('empty')  # nothing synced yet: not listed
+        rows = {i['author']: i for i in self.items()}
+        self.assertEqual(set(rows), {'alice', 'dave'})
+        self.assertEqual((rows['alice']['count'], rows['alice']['remote']), (1, 2))
+        self.assertEqual((rows['dave']['count'], rows['dave']['remote']), (0, 1))
+        works = self.client.get('/api/blogger/works', params={'author': 'alice'}).json()['items']
+        self.assertEqual([w['title'] for w in works], ['remote new', 'remote old'])
+        self.assertEqual((works[0]['id'], works[0]['subscription_id'], works[0]['status']), ('row-v3', 'sub-alice', 'not_downloaded'))
+        self.assertEqual(self.client.get('/api/blogger', params={'author': 'dave'}).json()['remote'], 1)
+        # the playable feed never contains the remote works
+        feed = self.client.get('/api/feed', params={'author': 'alice'}).json()
+        self.assertEqual([i['title'] for i in feed['items']], ['a1'])
+        self.assertEqual(self.client.get('/api/feed', params={'author': 'dave'}).json()['items'], [])
+        self.assertEqual(self.client.get('/api/blogger/works', params={'author': 'nobody'}).json()['items'], [])
 
     def test_requires_login(self):
         with TestClient(self.app) as anonymous:

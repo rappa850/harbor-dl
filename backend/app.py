@@ -664,7 +664,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         def prefetch(url):
             # these endpoints run in a worker thread; the download itself belongs on the event loop
             anyio_thread.run_sync(covers.fetch_later, url, url, network.for_url(url))
-        return Bloggers(make_feed(), store, covers, prefetch)
+        return Bloggers(make_feed(), store, covers, prefetch, catalog)
 
     @app.get('/api/bloggers')
     def blogger_list(q: str = Query(default='', max_length=128), sort: str = 'recent', account=Depends(user)):
@@ -672,6 +672,11 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             return {'items': bloggers().list(q, sort)}
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get('/api/blogger/works')
+    def blogger_works(author: str = Query(min_length=1, max_length=256), account=Depends(user)):
+        """Synced works of this blogger that are not downloaded; download one with the subscription download endpoint."""
+        return {'items': bloggers().works(author)}
 
     @app.get('/api/blogger')
     def blogger_detail(author: str = Query(min_length=1, max_length=256), account=Depends(user)):
