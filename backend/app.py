@@ -31,6 +31,8 @@ from .network import NetworkConfig
 from .player import PlaybackRecords, metadata, srt_to_vtt, subtitle_list
 from .task_query import TaskQuery
 from .logs import FailureLog
+from .feed import Feed
+from .library_covers import run_ffmpeg
 from .api_tokens import ApiTokens
 from .subscriptions import Subscriptions, SubscriptionEdit, SubscriptionImport
 from .subscription_profiles import ProfileInput, ProfileResolver
@@ -76,6 +78,10 @@ class Credentials(BaseModel):
 
 class LoginInput(Credentials):
     remember: bool = True
+
+
+class AppLoginInput(Credentials):
+    device: str = Field(default='Harbor App', max_length=128)
 
 
 class ProfileUpdate(BaseModel):
@@ -244,7 +250,8 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         if request.url.path.startswith('/api/'):
-            response.headers['Cache-Control'] = 'no-store'
+            # endpoints that serve immutable media set their own cache policy; everything else is never cached
+            response.headers.setdefault('Cache-Control', 'no-store')
         return response
 
     def session_user(request: Request):
@@ -309,6 +316,17 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         if not account or not matched:
             raise HTTPException(401, '用户名或密码错误')
         return set_session(response, account, request, payload.remember)
+
+    @app.post('/api/auth/app-login')
+    def app_login(payload: AppLoginInput):
+        """Sign in from a native app: returns a revocable API token (shown once) instead of a cookie."""
+        account = store.one('SELECT * FROM users WHERE username=?', (payload.username,))
+        dummy = '0' * 32 + '$' + '0' * 64
+        matched = password_matches(payload.password, account['password'] if account else dummy)
+        if not account or not matched:
+            raise HTTPException(401, '用户名或密码错误')
+        issued = api_tokens.create(account['id'], payload.device[:64] or 'Harbor App', 365)
+        return {'token': issued['token'], 'token_id': issued['id'], 'username': account['username']}
 
     @app.get('/api/auth/me')
     def me(account=Depends(user)):
@@ -566,6 +584,14 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             item['ratio'] = image_ratio(shown) if shown else None
         return {'items': items}
 
+    @app.get('/api/feed')
+    def feed(cursor: str = '', limit: int = 20, mode: str = 'latest', seed: str = '', author: str = '',
+             account=Depends(user)):
+        try:
+            return Feed(store, manager.assets, covers, key_for).page(cursor, limit, mode, seed, author)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @app.post('/api/library/export')
     async def library_export_all(overwrite: bool = False, account=Depends(user)):
         try:
@@ -616,7 +642,29 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         asset = manager.assets.get(task_id)
         if asset['kind'] == 'attachment':
             return FileResponse(path, filename=path.name, media_type='application/octet-stream')
-        return FileResponse(path, filename=path.name, content_disposition_type='inline')
+        # a downloaded file never changes in place; ETag/Last-Modified let clients revalidate cheaply
+        return FileResponse(path, filename=path.name, content_disposition_type='inline',
+                            headers={'Cache-Control': 'private, max-age=86400'})
+
+    @app.get('/api/files/{asset_id}/poster')
+    def poster(asset_id: str, account=Depends(user)):
+        """A still from the video, cut once and kept, for feeds whose work has no downloaded cover."""
+        asset = manager.assets.get(asset_id)
+        if not asset or asset['kind'] != 'video':
+            raise HTTPException(404, '媒体文件不存在')
+        target = data / 'posters' / f"{asset['id']}.jpg"
+        if not target.is_file():
+            source = asset_path(asset_id)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f'.{target.name}.{os.getpid()}.tmp.jpg')
+            cut = any(run_ffmpeg(library_ffmpeg(), ['-ss', at, '-i', str(source), '-frames:v', '1',
+                                                    '-vf', "scale='min(720,iw)':-2", '-q:v', '4', str(tmp)])
+                      and tmp.is_file() for at in ('1', '0'))
+            if not cut:
+                tmp.unlink(missing_ok=True)
+                raise HTTPException(404, '无法生成封面')
+            os.replace(tmp, target)
+        return FileResponse(target, headers={'Cache-Control': 'private, max-age=604800'})
 
     @app.get('/api/files/{asset_id}/gallery')
     def gallery(asset_id: str, account=Depends(user)):
