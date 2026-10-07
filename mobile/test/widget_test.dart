@@ -14,6 +14,13 @@ void main() {
     expect((item.id, item.title, item.author, item.stream), ('a', '', 'x', '/api/files/a/stream'));
   });
 
+  test('FeedItem reads favorite and resume position, defaults when absent', () {
+    final saved = FeedItem.fromJson({'id': 'a', 'stream': '/s', 'favorite': true, 'position': 12.5});
+    expect((saved.favorite, saved.position), (true, 12.5));
+    final plain = FeedItem.fromJson({'id': 'b', 'stream': '/s'});
+    expect((plain.favorite, plain.position), (false, 0));
+  });
+
   testWidgets('login page shows its fields', (tester) async {
     await tester.pumpWidget(MaterialApp(home: LoginPage(onLogin: (_) {}, initialServer: 'http://nas:8765')));
     expect(find.text('服务器地址'), findsOneWidget);

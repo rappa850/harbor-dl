@@ -80,6 +80,11 @@ class LoginInput(Credentials):
     remember: bool = True
 
 
+class HistoryInput(BaseModel):
+    asset_id: str = Field(min_length=1, max_length=64)
+    position: float = Field(default=0, ge=0, le=86400 * 7)
+
+
 class AppLoginInput(Credentials):
     device: str = Field(default='Harbor App', max_length=128)
 
@@ -588,9 +593,45 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     def feed(cursor: str = '', limit: int = 20, mode: str = 'latest', seed: str = '', author: str = '',
              account=Depends(user)):
         try:
-            return Feed(store, manager.assets, covers, key_for).page(cursor, limit, mode, seed, author)
+            return Feed(store, manager.assets, covers, key_for).page(account['id'], cursor, limit, mode, seed, author)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get('/api/authors')
+    def authors(account=Depends(user)):
+        return {'items': Feed(store, manager.assets, covers, key_for).authors()}
+
+    def video_asset(asset_id):
+        asset = manager.assets.get(asset_id)
+        if not asset or asset['kind'] != 'video':
+            raise HTTPException(404, '媒体文件不存在')
+        return asset['id']
+
+    @app.put('/api/favorites/{asset_id}')
+    def favorite(asset_id: str, account=Depends(user)):
+        with store.connect() as db:
+            db.execute('INSERT OR IGNORE INTO favorites VALUES (?,?,?)', (account['id'], video_asset(asset_id), time.time()))
+        return {'favorite': True}
+
+    @app.delete('/api/favorites/{asset_id}')
+    def unfavorite(asset_id: str, account=Depends(user)):
+        with store.connect() as db:
+            db.execute('DELETE FROM favorites WHERE user_id=? AND asset_id=?', (account['id'], asset_id))
+        return {'favorite': False}
+
+    @app.post('/api/history')
+    def watched(payload: HistoryInput, account=Depends(user)):
+        with store.connect() as db:
+            db.execute('INSERT INTO watch_history VALUES (?,?,?,?) ON CONFLICT(user_id,asset_id) DO UPDATE SET '
+                       'position=excluded.position,watched_at=excluded.watched_at',
+                       (account['id'], video_asset(payload.asset_id), payload.position, time.time()))
+        return {'ok': True}
+
+    @app.delete('/api/history')
+    def clear_history(account=Depends(user)):
+        with store.connect() as db:
+            removed = db.execute('DELETE FROM watch_history WHERE user_id=?', (account['id'],)).rowcount
+        return {'removed': removed}
 
     @app.post('/api/library/export')
     async def library_export_all(overwrite: bool = False, account=Depends(user)):

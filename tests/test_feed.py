@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from backend.api_tokens import ApiTokens
 from backend.app import create_app
 
 
@@ -111,6 +112,55 @@ class FeedTests(unittest.TestCase):
         item = self.feed()['items'][0]
         self.assertEqual(self.client.get(item['cover']).status_code, 404)
         self.assertEqual(self.client.get('/api/files/nope/poster').status_code, 404)
+
+    def test_favorites_flow_and_order(self):
+        for n in range(3):
+            self.add(f'v{n}', 'alice', f'2026-01-0{n + 1}T00:00:00+00:00')
+        ids = {i['title']: i['id'] for i in self.feed()['items']}
+        self.assertEqual(self.feed(mode='favorites')['items'], [])
+        for title in ('v0', 'v2'):
+            self.assertEqual(self.client.put(f'/api/favorites/{ids[title]}').json(), {'favorite': True})
+        self.assertEqual(self.client.put(f'/api/favorites/{ids["v0"]}').status_code, 200)  # idempotent
+        mine = self.feed(mode='favorites')
+        self.assertEqual([i['title'] for i in mine['items']], ['v2', 'v0'])
+        self.assertEqual({i['title']: i['favorite'] for i in self.feed()['items']}, {'v0': True, 'v1': False, 'v2': True})
+        self.client.delete(f'/api/favorites/{ids["v2"]}')
+        self.assertEqual([i['title'] for i in self.feed(mode='favorites')['items']], ['v0'])
+        self.assertEqual(self.client.put('/api/favorites/nope').status_code, 404)
+
+    def test_history_records_position_and_orders_by_recency(self):
+        self.add('a'); self.add('b')
+        ids = {i['title']: i['id'] for i in self.feed()['items']}
+        self.assertEqual(self.client.post('/api/history', json={'asset_id': ids['a'], 'position': 12.5}).status_code, 200)
+        self.client.post('/api/history', json={'asset_id': ids['b'], 'position': 3})
+        self.client.post('/api/history', json={'asset_id': ids['a'], 'position': 20})
+        seen = self.feed(mode='history')['items']
+        self.assertEqual([(i['title'], i['position']) for i in seen], [('a', 20), ('b', 3)])
+        self.assertEqual(self.client.post('/api/history', json={'asset_id': ids['a'], 'position': -1}).status_code, 422)
+        self.assertEqual(self.client.post('/api/history', json={'asset_id': 'nope'}).status_code, 404)
+        self.assertEqual(self.client.delete('/api/history').json(), {'removed': 2})
+        self.assertEqual(self.feed(mode='history')['items'], [])
+
+    def test_state_is_per_user(self):
+        self.add('a')
+        asset = self.feed()['items'][0]['id']
+        self.client.put(f'/api/favorites/{asset}')
+        self.client.post('/api/history', json={'asset_id': asset, 'position': 5})
+        with self.app.state.store.connect() as db:
+            db.execute("INSERT INTO users(username,password,created_at) VALUES ('second','x','now')")
+            second = db.execute("SELECT id FROM users WHERE username='second'").fetchone()['id']
+        token = ApiTokens(self.app.state.store).create(second, 'phone', None)['token']
+        with TestClient(self.app) as other:
+            other.headers['Authorization'] = f'Bearer {token}'
+            self.assertEqual(other.get('/api/feed', params={'mode': 'favorites'}).json()['items'], [])
+            self.assertEqual(other.get('/api/feed', params={'mode': 'history'}).json()['items'], [])
+            self.assertFalse(other.get('/api/feed').json()['items'][0]['favorite'])
+        self.assertTrue(self.feed()['items'][0]['favorite'])
+
+    def test_authors_counts(self):
+        self.add('a1', 'alice'); self.add('a2', 'alice'); self.add('b1', 'bob'); self.add('n1', '')
+        self.assertEqual(self.client.get('/api/authors').json()['items'],
+                         [{'author': 'alice', 'count': 2}, {'author': 'bob', 'count': 1}])
 
     def test_validation(self):
         self.assertEqual(self.client.get('/api/feed', params={'cursor': '!!'}).status_code, 422)

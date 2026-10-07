@@ -2,15 +2,19 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class FeedItem {
-  FeedItem(this.id, this.title, this.author, this.duration, this.cover, this.stream);
+  FeedItem(this.id, this.title, this.author, this.duration, this.cover, this.stream,
+      {this.favorite = false, this.position = 0});
 
   final String id, title, author, stream;
   final num? duration;
   final String? cover;
+  bool favorite;
+  final num position;
 
   factory FeedItem.fromJson(Map<String, dynamic> j) => FeedItem(
       j['id'] as String, (j['title'] ?? '') as String, (j['author'] ?? '') as String,
-      j['duration'] as num?, j['cover'] as String?, j['stream'] as String);
+      j['duration'] as num?, j['cover'] as String?, j['stream'] as String,
+      favorite: (j['favorite'] ?? false) as bool, position: (j['position'] ?? 0) as num);
 }
 
 class FeedPageData {
@@ -82,10 +86,10 @@ class Api {
     }
   }
 
-  Future<FeedPageData> feed({String? cursor, String mode = 'latest', String seed = '', int limit = 20}) async {
+  Future<FeedPageData> feed({String? cursor, String mode = 'latest', String seed = '', String author = '', int limit = 20}) async {
     try {
-      final response = await _dio.get('/api/feed',
-          queryParameters: {'limit': limit, 'mode': mode, 'seed': seed, 'cursor': ?cursor});
+      final response = await _dio.get('/api/feed', queryParameters: {
+        'limit': limit, 'mode': mode, 'seed': seed, 'cursor': ?cursor, if (author.isNotEmpty) 'author': author});
       final data = response.data as Map<String, dynamic>;
       return FeedPageData(
           [for (final raw in data['items'] as List) FeedItem.fromJson(raw as Map<String, dynamic>)],
@@ -94,6 +98,24 @@ class Api {
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) throw Unauthorized();
       throw '加载失败，请检查网络';
+    }
+  }
+
+  /// Best effort: a failed call never interrupts playback; callers that need the outcome check the result.
+  Future<bool> setFavorite(String id, bool on) async {
+    try {
+      on ? await _dio.put('/api/favorites/$id') : await _dio.delete('/api/favorites/$id');
+      return true;
+    } on DioException {
+      return false;
+    }
+  }
+
+  Future<void> watched(String id, num position) async {
+    try {
+      await _dio.post('/api/history', data: {'asset_id': id, 'position': position});
+    } on DioException {
+      // history is a convenience; losing one entry is fine
     }
   }
 }

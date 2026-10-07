@@ -1,11 +1,11 @@
 import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import 'api.dart';
+import 'feed_tile.dart';
 import 'video_cache.dart';
 
 /// How many neighbours on each side keep a prepared (initialised, paused) player.
@@ -14,11 +14,25 @@ const kPreload = 1;
 /// How many upcoming videos are downloaded to disk ahead of the current page.
 const kPrefetch = 2;
 
+/// Watching less than this is not worth a history entry (the user swiped straight past).
+const kHistoryAfter = Duration(seconds: 2);
+
 class FeedPage extends StatefulWidget {
-  const FeedPage({super.key, required this.api, required this.onLogout});
+  const FeedPage(
+      {super.key, required this.api, required this.onLogout, this.mode = 'random', this.author = '', this.header, this.onAuthor});
 
   final Api api;
   final VoidCallback onLogout;
+
+  /// random | latest | favorites | history (see backend/feed.py)
+  final String mode;
+
+  /// Only this author's videos, when set.
+  final String author;
+
+  /// Drawn over the top of the feed (mode tabs or a back button).
+  final Widget? header;
+  final void Function(String author)? onAuthor;
 
   @override
   State<FeedPage> createState() => _FeedPageState();
@@ -31,7 +45,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   final _opening = <int>{};
   VideoCache? _cache;
   String? _next, _error;
-  bool _loading = false, _done = false, _paused = false;
+  bool _loading = false, _done = false, _paused = false, _fast = false;
   int _index = 0;
   late final String _seed = DateTime.now().millisecondsSinceEpoch.toString();
 
@@ -54,6 +68,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _report(_index);
     WidgetsBinding.instance.removeObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     for (final player in _players.values) {
@@ -66,6 +81,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) {
+      _report(_index);
       _players[_index]?.pause();
     } else if (!_paused) {
       _players[_index]?.play();
@@ -79,7 +95,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       _error = null;
     });
     try {
-      final page = await widget.api.feed(cursor: _next, mode: 'random', seed: _seed);
+      final page = await widget.api.feed(cursor: _next, mode: widget.mode, seed: _seed, author: widget.author);
       if (!mounted) return;
       setState(() {
         _items.addAll(page.items);
@@ -142,13 +158,43 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       return;
     }
     if (!mounted || _players[i] != controller) return;
+    // history resumes where the user stopped, unless that was (almost) the end
+    if (widget.mode == 'history' && item.position > 3 && controller.value.duration.inSeconds - item.position > 3) {
+      await controller.seekTo(Duration(seconds: item.position.toInt()));
+      if (!mounted || _players[i] != controller) return;
+    }
     setState(() {});
     if (i == _index && !_paused) controller.play();
   }
 
+  /// Remember how far the user got in page [i] (fire and forget).
+  void _report(int i) {
+    final player = _players[i];
+    if (player == null || !player.value.isInitialized || i >= _items.length) return;
+    final position = player.value.position;
+    if (position >= kHistoryAfter) widget.api.watched(_items[i].id, position.inSeconds);
+  }
+
+  Future<void> _favorite(FeedItem item, bool on) async {
+    if (item.favorite == on) return;
+    setState(() => item.favorite = on);
+    if (!await widget.api.setFavorite(item.id, on) && mounted) {
+      setState(() => item.favorite = !on);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败，请检查网络')));
+    }
+  }
+
+  void _speed(bool fast) {
+    _players[_index]?.setPlaybackSpeed(fast ? 2.0 : 1.0);
+    setState(() => _fast = fast);
+  }
+
   void _onPage(int index) {
+    _report(_index);
+    _players[_index]?.setPlaybackSpeed(1.0);
     _index = index;
     _paused = false;
+    _fast = false;
     _sync();
     if (index >= _items.length - 5) _more();
   }
@@ -162,92 +208,56 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     });
   }
 
+  String get _emptyText => switch (widget.mode) {
+        'favorites' => '还没有收藏，双击视频就能收藏',
+        'history' => '还没有观看记录',
+        _ => widget.author.isNotEmpty ? '这位作者还没有可播放的视频' : '库里还没有可播放的视频',
+      };
+
   @override
   Widget build(BuildContext context) {
+    final header = widget.header;
     if (_items.isEmpty) {
       return Scaffold(
         backgroundColor: Colors.black,
-        body: Center(
-          child: _loading
-              ? const CircularProgressIndicator()
-              : Column(mainAxisSize: MainAxisSize.min, children: [
-                  Text(_error ?? '库里还没有可播放的视频', style: const TextStyle(color: Colors.white70)),
-                  const SizedBox(height: 12),
-                  FilledButton(onPressed: _more, child: const Text('重试')),
-                  TextButton(onPressed: widget.onLogout, child: const Text('切换账号')),
-                ]),
-        ),
+        body: Stack(children: [
+          Center(
+            child: _loading
+                ? const CircularProgressIndicator()
+                : Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(_error ?? _emptyText, style: const TextStyle(color: Colors.white70)),
+                    const SizedBox(height: 12),
+                    FilledButton(onPressed: _more, child: const Text('重试')),
+                    TextButton(onPressed: widget.onLogout, child: const Text('切换账号')),
+                  ]),
+          ),
+          // keep the tabs reachable even when this mode has nothing to show
+          if (header != null) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),
+        ]),
       );
     }
     return Scaffold(
       backgroundColor: Colors.black,
-      body: PageView.builder(
-        controller: _pages,
-        scrollDirection: Axis.vertical,
-        onPageChanged: _onPage,
-        itemCount: _items.length,
-        itemBuilder: (context, i) => RepaintBoundary(
-          child: _VideoTile(
-              item: _items[i],
-              session: widget.api.session,
-              player: _players[i],
-              paused: _paused && i == _index,
-              onTap: _toggle),
-        ),
-      ),
-    );
-  }
-}
-
-class _VideoTile extends StatelessWidget {
-  const _VideoTile({required this.item, required this.session, required this.player, required this.paused, required this.onTap});
-
-  final FeedItem item;
-  final Session session;
-  final VideoPlayerController? player;
-  final bool paused;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = player;
-    final ready = controller != null && controller.value.isInitialized;
-    final failed = controller?.value.hasError ?? false;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Stack(fit: StackFit.expand, children: [
-        // the cover stays underneath until the first frame is ready, so a swipe never shows black
-        if (item.cover != null)
-          CachedNetworkImage(
-              imageUrl: session.url(item.cover!), httpHeaders: session.headers, fit: BoxFit.contain, errorWidget: (_, _, _) => const SizedBox()),
-        if (ready)
-          Center(
-              child: AspectRatio(
-                  aspectRatio: controller.value.aspectRatio, child: VideoPlayer(controller))),
-        if (!ready && !failed) const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-        if (failed) const Center(child: Text('无法播放这个视频', style: TextStyle(color: Colors.white70))),
-        if (paused) const Center(child: Icon(Icons.play_arrow_rounded, size: 88, color: Colors.white70)),
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 24,
-          child: SafeArea(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              if (item.author.isNotEmpty)
-                Text('@${item.author}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16)),
-              const SizedBox(height: 6),
-              Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 14)),
-            ]),
+      body: Stack(children: [
+        PageView.builder(
+          controller: _pages,
+          scrollDirection: Axis.vertical,
+          onPageChanged: _onPage,
+          itemCount: _items.length,
+          itemBuilder: (context, i) => RepaintBoundary(
+            child: VideoTile(
+                item: _items[i],
+                session: widget.api.session,
+                player: _players[i],
+                paused: _paused && i == _index,
+                fast: _fast && i == _index,
+                onToggle: _toggle,
+                onFavorite: (on) => _favorite(_items[i], on),
+                onSpeed: _speed,
+                onAuthor: widget.onAuthor == null || _items[i].author.isEmpty ? null : () => widget.onAuthor!(_items[i].author)),
           ),
         ),
-        if (ready)
-          Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: VideoProgressIndicator(controller, allowScrubbing: false, padding: EdgeInsets.zero,
-                  colors: const VideoProgressColors(playedColor: Colors.white, bufferedColor: Colors.white24, backgroundColor: Colors.transparent))),
+        if (header != null) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),
       ]),
     );
   }
