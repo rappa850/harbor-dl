@@ -17,6 +17,40 @@ class FeedItem {
       favorite: (j['favorite'] ?? false) as bool, position: (j['position'] ?? 0) as num);
 }
 
+class Blogger {
+  Blogger(this.author, this.count, this.avatar, this.signature, this.platform, this.followers);
+
+  final String author, signature, platform;
+  final int count;
+  final String? avatar;
+  final int? followers;
+
+  factory Blogger.fromJson(Map<String, dynamic> j) => Blogger(
+      j['author'] as String, j['count'] as int, j['avatar'] as String?, (j['signature'] ?? '') as String,
+      (j['platform'] ?? '') as String, j['followers'] as int?);
+}
+
+/// What the profile tab shows. [avatar] and [background] are cache-busting versions, null when not set.
+class Me {
+  Me(this.username, this.avatar, this.background, this.favorites, this.history, this.videos);
+
+  final String username;
+  final int? avatar, background;
+  final int favorites, history, videos;
+
+  factory Me.fromJson(Map<String, dynamic> j) => Me(j['username'] as String, j['avatar'] as int?,
+      j['background'] as int?, j['favorites'] as int, j['history'] as int, j['videos'] as int);
+}
+
+/// Where a tapped grid cell should start the full-screen feed: the loaded items, the position and how to continue.
+class FeedSeed {
+  FeedSeed(this.items, this.next, this.index);
+
+  final List<FeedItem> items;
+  final String? next;
+  final int index;
+}
+
 class FeedPageData {
   FeedPageData(this.items, this.next, this.total);
   final List<FeedItem> items;
@@ -100,6 +134,42 @@ class Api {
       throw '加载失败，请检查网络';
     }
   }
+
+  Future<T> _read<T>(Future<T> Function() call) async {
+    try {
+      return await call();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) throw Unauthorized();
+      throw '加载失败，请检查网络';
+    }
+  }
+
+  Future<List<Blogger>> bloggers({String query = '', String sort = 'recent'}) => _read(() async {
+        final response = await _dio.get('/api/bloggers', queryParameters: {'q': query, 'sort': sort});
+        return [for (final raw in response.data['items'] as List) Blogger.fromJson(raw as Map<String, dynamic>)];
+      });
+
+  Future<Blogger> blogger(String author) => _read(() async {
+        final response = await _dio.get('/api/blogger', queryParameters: {'author': author});
+        return Blogger.fromJson(response.data as Map<String, dynamic>);
+      });
+
+  Future<Me> me() => _read(() async => Me.fromJson((await _dio.get('/api/app/me')).data as Map<String, dynamic>));
+
+  /// [kind] is 'avatar' or 'background'. Throws a readable message when the server refuses the picture.
+  Future<void> putPicture(String kind, List<int> bytes) async {
+    try {
+      await _dio.put('/api/auth/$kind',
+          data: Stream.value(bytes),
+          options: Options(headers: {Headers.contentLengthHeader: bytes.length, Headers.contentTypeHeader: 'application/octet-stream'}));
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 413) throw '图片太大了';
+      if (e.response?.statusCode == 415) throw '只支持 PNG、JPEG 或 WebP 图片';
+      throw '上传失败，请检查网络';
+    }
+  }
+
+  Future<void> deletePicture(String kind) => _read(() => _dio.delete('/api/auth/$kind'));
 
   /// Best effort: a failed call never interrupts playback; callers that need the outcome check the result.
   Future<bool> setFavorite(String id, bool on) async {

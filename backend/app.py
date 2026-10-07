@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 from typing import Annotated, Literal
 from uuid import UUID
 
+from anyio import from_thread as anyio_thread
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,7 @@ from .player import PlaybackRecords, metadata, srt_to_vtt, subtitle_list
 from .task_query import TaskQuery
 from .logs import FailureLog
 from .feed import Feed
+from .bloggers import Bloggers
 from .library_covers import run_ffmpeg
 from .api_tokens import ApiTokens
 from .subscriptions import Subscriptions, SubscriptionEdit, SubscriptionImport
@@ -373,34 +375,74 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         return {'username': row['username'], 'created_at': row['created_at'], 'active_sessions': sessions,
                 'api_tokens': len(api_tokens.list(account['id'])), 'avatar': avatar_version(account['id'])}
 
-    @app.get('/api/auth/avatar')
-    def get_avatar(account=Depends(session_user)):
-        path = avatar_file(account['id'])
+    background_dir = data / 'backgrounds'
+
+    def background_version(user_id):
+        path = next(iter(background_dir.glob(f'{user_id}.*')), None)
+        return int(path.stat().st_mtime_ns // 1000) if path else None
+
+    def serve_picture(folder, user_id, missing):
+        path = next(iter(folder.glob(f'{user_id}.*')), None)
         if not path:
-            raise HTTPException(404, '尚未设置头像')
+            raise HTTPException(404, missing)
         kind = sniff_avatar(path.read_bytes()[:16])
         return FileResponse(path, media_type=kind[1] if kind else 'application/octet-stream',
                             headers={'Cache-Control': 'private, max-age=31536000, immutable'})
 
-    @app.put('/api/auth/avatar')
-    async def put_avatar(request: Request, account=Depends(session_user)):
+    async def store_picture(folder, user_id, request, limit, label):
         blob = await request.body()
-        if len(blob) > 2 * 1024 * 1024:
-            raise HTTPException(413, '头像不能超过 2 MB')
+        if len(blob) > limit:
+            raise HTTPException(413, f'{label}不能超过 {limit // (1024 * 1024)} MB')
         kind = sniff_avatar(blob)
         if not kind:
-            raise HTTPException(415, '头像仅支持 PNG、JPEG 或 WebP 图片')
-        avatar_dir.mkdir(parents=True, exist_ok=True)
-        for old in avatar_dir.glob(f"{account['id']}.*"):
+            raise HTTPException(415, f'{label}仅支持 PNG、JPEG 或 WebP 图片')
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob(f'{user_id}.*'):
             old.unlink()
-        (avatar_dir / f"{account['id']}.{kind[0]}").write_bytes(blob)
+        (folder / f'{user_id}.{kind[0]}').write_bytes(blob)
+
+    def drop_picture(folder, user_id):
+        for old in folder.glob(f'{user_id}.*'):
+            old.unlink()
+
+    # Pictures are also managed from the native app, which signs in with an API token rather than a cookie.
+    @app.get('/api/auth/avatar')
+    def get_avatar(account=Depends(user)):
+        return serve_picture(avatar_dir, account['id'], '尚未设置头像')
+
+    @app.put('/api/auth/avatar')
+    async def put_avatar(request: Request, account=Depends(user)):
+        await store_picture(avatar_dir, account['id'], request, 2 * 1024 * 1024, '头像')
         return {'avatar': avatar_version(account['id'])}
 
     @app.delete('/api/auth/avatar')
-    def delete_avatar(account=Depends(session_user)):
-        for old in avatar_dir.glob(f"{account['id']}.*"):
-            old.unlink()
+    def delete_avatar(account=Depends(user)):
+        drop_picture(avatar_dir, account['id'])
         return {'avatar': None}
+
+    @app.get('/api/auth/background')
+    def get_background(account=Depends(user)):
+        return serve_picture(background_dir, account['id'], '尚未设置主页背景')
+
+    @app.put('/api/auth/background')
+    async def put_background(request: Request, account=Depends(user)):
+        await store_picture(background_dir, account['id'], request, 6 * 1024 * 1024, '主页背景')
+        return {'background': background_version(account['id'])}
+
+    @app.delete('/api/auth/background')
+    def delete_background(account=Depends(user)):
+        drop_picture(background_dir, account['id'])
+        return {'background': None}
+
+    @app.get('/api/app/me')
+    def app_me(account=Depends(user)):
+        """Everything the app's profile tab shows in one call."""
+        feed = Feed(store, manager.assets, covers, key_for)
+        # counted through the feed so deleted files do not inflate the numbers
+        total = lambda mode: feed.page(account['id'], limit=1, mode=mode)['total']
+        return {'username': account['username'], 'avatar': avatar_version(account['id']),
+                'background': background_version(account['id']), 'favorites': total('favorites'),
+                'history': total('history'), 'videos': total('latest')}
 
     @app.patch('/api/auth/profile')
     def update_profile(payload: ProfileUpdate, account=Depends(session_user)):
@@ -600,6 +642,26 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     @app.get('/api/authors')
     def authors(account=Depends(user)):
         return {'items': Feed(store, manager.assets, covers, key_for).authors()}
+
+    def bloggers():
+        def prefetch(url):
+            # these endpoints run in a worker thread; the download itself belongs on the event loop
+            anyio_thread.run_sync(covers.fetch_later, url, url, network.for_url(url))
+        return Bloggers(Feed(store, manager.assets, covers, key_for), store, covers, prefetch)
+
+    @app.get('/api/bloggers')
+    def blogger_list(q: str = Query(default='', max_length=128), sort: str = 'recent', account=Depends(user)):
+        try:
+            return {'items': bloggers().list(q, sort)}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.get('/api/blogger')
+    def blogger_detail(author: str = Query(min_length=1, max_length=256), account=Depends(user)):
+        found = bloggers().get(author)
+        if not found:
+            raise HTTPException(404, '博主不存在')
+        return found
 
     def video_asset(asset_id):
         asset = manager.assets.get(asset_id)

@@ -63,6 +63,16 @@ class VideoCache {
     return target;
   }
 
+  /// Bytes the cached videos occupy.
+  int size() => dir.existsSync() ? dir.listSync().whereType<File>().fold(0, (sum, f) => sum + f.lengthSync()) : 0;
+
+  void clear() {
+    if (!dir.existsSync()) return;
+    for (final file in dir.listSync().whereType<File>()) {
+      file.deleteSync();
+    }
+  }
+
   Future<void> trim() async {
     final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.mp4')).toList();
     final stats = {for (final f in files) f: f.statSync()};

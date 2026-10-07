@@ -7,10 +7,14 @@ const _tabs = [('random', '推荐'), ('latest', '最新'), ('favorites', '收藏
 
 /// The feed with a mode switcher on top. Each mode is its own feed (own pagination, own players).
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.api, required this.onLogout});
+  const HomePage({super.key, required this.api, required this.onLogout, required this.onAuthor, this.active = true});
 
   final Api api;
   final VoidCallback onLogout;
+  final Future<void> Function(String author) onAuthor;
+
+  /// False while another tab is showing.
+  final bool active;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -19,14 +23,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   String _mode = 'random';
 
-  void _openAuthor(String author) => Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => FeedPage(
-          api: widget.api,
-          onLogout: widget.onLogout,
-          mode: 'latest',
-          author: author,
-          header: _AuthorBar(author: author))));
-
   @override
   Widget build(BuildContext context) {
     return FeedPage(
@@ -34,7 +30,8 @@ class _HomePageState extends State<HomePage> {
       api: widget.api,
       onLogout: widget.onLogout,
       mode: _mode,
-      onAuthor: _openAuthor,
+      active: widget.active,
+      onAuthor: widget.onAuthor,
       header: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
         for (final (id, label) in _tabs)
           TextButton(
@@ -48,18 +45,4 @@ class _HomePageState extends State<HomePage> {
       ]),
     );
   }
-}
-
-class _AuthorBar extends StatelessWidget {
-  const _AuthorBar({required this.author});
-
-  final String author;
-
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        IconButton(onPressed: () => Navigator.of(context).maybePop(), icon: const Icon(Icons.arrow_back, color: Colors.white)),
-        Expanded(
-            child: Text('@$author',
-                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600))),
-      ]);
 }

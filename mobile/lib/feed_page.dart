@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import 'api.dart';
@@ -19,7 +18,15 @@ const kHistoryAfter = Duration(seconds: 2);
 
 class FeedPage extends StatefulWidget {
   const FeedPage(
-      {super.key, required this.api, required this.onLogout, this.mode = 'random', this.author = '', this.header, this.onAuthor});
+      {super.key,
+      required this.api,
+      required this.onLogout,
+      this.mode = 'random',
+      this.author = '',
+      this.header,
+      this.onAuthor,
+      this.initial,
+      this.active = true});
 
   final Api api;
   final VoidCallback onLogout;
@@ -32,28 +39,41 @@ class FeedPage extends StatefulWidget {
 
   /// Drawn over the top of the feed (mode tabs or a back button).
   final Widget? header;
-  final void Function(String author)? onAuthor;
+
+  /// Opens the author's page. Playback is held until the returned future completes.
+  final Future<void> Function(String author)? onAuthor;
+
+  /// Start from items that are already loaded (a tapped grid cell) instead of fetching the first page.
+  final FeedSeed? initial;
+
+  /// False while another tab or page covers this feed: playback pauses and resumes with it.
+  final bool active;
 
   @override
   State<FeedPage> createState() => _FeedPageState();
 }
 
 class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
-  final _pages = PageController();
+  late final _pages = PageController(initialPage: widget.initial?.index ?? 0);
   final _items = <FeedItem>[];
   final _players = <int, VideoPlayerController>{};
   final _opening = <int>{};
   VideoCache? _cache;
   String? _next, _error;
-  bool _loading = false, _done = false, _paused = false, _fast = false;
-  int _index = 0;
+  bool _loading = false, _done = false, _paused = false, _fast = false, _held = false;
+  late int _index = widget.initial?.index ?? 0;
   late final String _seed = DateTime.now().millisecondsSinceEpoch.toString();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    final initial = widget.initial;
+    if (initial != null) {
+      _items.addAll(initial.items);
+      _next = initial.next;
+      _done = initial.next == null;
+    }
     _start();
   }
 
@@ -63,14 +83,45 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     } catch (_) {
       // no usable cache folder: playback still works over the network
     }
-    if (mounted) _more();
+    if (!mounted) return;
+    if (widget.initial != null) {
+      setState(_sync);
+    } else {
+      _more();
+    }
+  }
+
+  @override
+  void didUpdateWidget(FeedPage old) {
+    super.didUpdateWidget(old);
+    if (old.active != widget.active) _hold(!widget.active);
+  }
+
+  /// Pause while something covers the feed (another tab, the author page); resume afterwards unless the user paused.
+  void _hold(bool on) {
+    _held = on;
+    final player = _players[_index];
+    if (on) {
+      _report(_index);
+      player?.pause();
+    } else if (!_paused && player != null && player.value.isInitialized) {
+      player.play();
+    }
+  }
+
+  Future<void> _author(String author) async {
+    _hold(true);
+    try {
+      await widget.onAuthor!(author);
+    } finally {
+      if (mounted && widget.active) _hold(false);
+    }
   }
 
   @override
   void dispose() {
     _report(_index);
     WidgetsBinding.instance.removeObserver(this);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     for (final player in _players.values) {
       player.dispose();
     }
@@ -83,7 +134,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     if (state != AppLifecycleState.resumed) {
       _report(_index);
       _players[_index]?.pause();
-    } else if (!_paused) {
+    } else if (!_paused && !_held) {
       _players[_index]?.play();
     }
   }
@@ -131,7 +182,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       _cache?.fetch(_items[_index + k]);
     }
     final current = _players[_index];
-    if (current != null && current.value.isInitialized && !_paused) current.play();
+    if (current != null && current.value.isInitialized && !_paused && !_held) current.play();
   }
 
   /// Start a player for page [i]: from disk when the file is already local, otherwise from the network. A neighbour
@@ -164,7 +215,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       if (!mounted || _players[i] != controller) return;
     }
     setState(() {});
-    if (i == _index && !_paused) controller.play();
+    if (i == _index && !_paused && !_held) controller.play();
   }
 
   /// Remember how far the user got in page [i] (fire and forget).
@@ -254,7 +305,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
                 onToggle: _toggle,
                 onFavorite: (on) => _favorite(_items[i], on),
                 onSpeed: _speed,
-                onAuthor: widget.onAuthor == null || _items[i].author.isEmpty ? null : () => widget.onAuthor!(_items[i].author)),
+                onAuthor: widget.onAuthor == null || _items[i].author.isEmpty ? null : () => _author(_items[i].author)),
           ),
         ),
         if (header != null) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),

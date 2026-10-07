@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'home_page.dart';
 import 'login_page.dart';
+import 'shell.dart';
 
 void main() => runApp(const HarborApp());
 
@@ -36,7 +36,7 @@ class _HarborAppState extends State<HarborApp> {
     } else if (_session == null) {
       home = LoginPage(initialServer: _lastServer, onLogin: (s) => setState(() => _session = s));
     } else {
-      home = HomePage(
+      home = Shell(
           key: ValueKey(_session!.token),
           api: Api(_session!),
           onLogout: () => setState(() {
