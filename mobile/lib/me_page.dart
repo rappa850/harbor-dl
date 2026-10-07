@@ -12,10 +12,13 @@ import 'widgets.dart';
 
 /// The user's own page: avatar and background picture (both changeable), counts, favorites and history as grids.
 class MePage extends StatefulWidget {
-  const MePage({super.key, required this.api, required this.onLogout});
+  const MePage({super.key, required this.api, required this.onLogout, this.active = true});
 
   final Api api;
   final VoidCallback onLogout;
+
+  /// False while another tab is shown; coming back reloads counts and lists (favorites change on the home tab).
+  final bool active;
 
   @override
   State<MePage> createState() => _MePageState();
@@ -25,6 +28,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
   late final _tabs = TabController(length: 3, vsync: this);
   Me? _me;
   bool _busy = false;
+  int _epoch = 0;
 
   Api get _api => widget.api;
 
@@ -32,6 +36,15 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(MePage old) {
+    super.didUpdateWidget(old);
+    if (!old.active && widget.active) {
+      _epoch++;
+      _load();
+    }
   }
 
   @override
@@ -235,6 +248,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
           VideoGrid(
             api: _api,
             mode: 'favorites',
+            refresh: _epoch,
             emptyText: '还没有收藏，双击视频就能收藏',
             onOpen: (seed) async {
               await openFeed(context, api: _api, onLogout: widget.onLogout, seed: seed, mode: 'favorites');
@@ -244,6 +258,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
           VideoGrid(
             api: _api,
             mode: 'history',
+            refresh: _epoch,
             emptyText: '还没有观看记录',
             onOpen: (seed) async {
               await openFeed(context, api: _api, onLogout: widget.onLogout, seed: seed, mode: 'history');

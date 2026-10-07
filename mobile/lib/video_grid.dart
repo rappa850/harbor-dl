@@ -7,10 +7,13 @@ import 'widgets.dart';
 /// Paged three-column grid of cover images. Tapping one hands the loaded items to [onOpen] so the full-screen feed can
 /// start right there and keep paging. Scrolls with the primary controller, so it works inside a NestedScrollView.
 class VideoGrid extends StatefulWidget {
-  const VideoGrid({super.key, required this.api, required this.mode, required this.emptyText, required this.onOpen, this.author = ''});
+  const VideoGrid({super.key, required this.api, required this.mode, required this.emptyText, required this.onOpen, this.author = '', this.refresh = 0});
 
   final Api api;
   final String mode, author, emptyText;
+
+  /// Changing this value reloads the grid (the parent bumps it when the tab is shown again).
+  final int refresh;
   final Future<void> Function(FeedSeed seed) onOpen;
 
   @override
@@ -29,6 +32,12 @@ class _VideoGridState extends State<VideoGrid> with AutomaticKeepAliveClientMixi
   void initState() {
     super.initState();
     _more();
+  }
+
+  @override
+  void didUpdateWidget(VideoGrid old) {
+    super.didUpdateWidget(old);
+    if (old.refresh != widget.refresh && !_loading) _reload();
   }
 
   Future<void> _more() async {

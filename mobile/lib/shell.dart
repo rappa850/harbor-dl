@@ -31,7 +31,7 @@ class _ShellState extends State<Shell> {
           onLogout: widget.onLogout,
           onAuthor: (author) => openBlogger(context, widget.api, widget.onLogout, author)),
       () => BloggersPage(api: widget.api, onLogout: widget.onLogout),
-      () => MePage(api: widget.api, onLogout: widget.onLogout),
+      () => MePage(api: widget.api, onLogout: widget.onLogout, active: _tab == 2),
     ];
     return Scaffold(
       backgroundColor: Colors.black,
