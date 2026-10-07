@@ -3,7 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class FeedItem {
   FeedItem(this.id, this.title, this.author, this.duration, this.cover, this.stream,
-      {this.favorite = false, this.position = 0});
+      {this.favorite = false, this.position = 0, this.localCover});
 
   final String id, title, author, stream;
   final num? duration;
@@ -11,10 +11,19 @@ class FeedItem {
   bool favorite;
   final num position;
 
+  /// Cover saved on the device for an offline copy; preferred over [cover] so it shows without a connection.
+  final String? localCover;
+
   factory FeedItem.fromJson(Map<String, dynamic> j) => FeedItem(
       j['id'] as String, (j['title'] ?? '') as String, (j['author'] ?? '') as String,
       j['duration'] as num?, j['cover'] as String?, j['stream'] as String,
       favorite: (j['favorite'] ?? false) as bool, position: (j['position'] ?? 0) as num);
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'title': title, 'author': author, 'duration': duration, 'cover': cover, 'stream': stream};
+
+  FeedItem withLocalCover(String? path) => FeedItem(id, title, author, duration, cover, stream,
+      favorite: favorite, position: position, localCover: path);
 }
 
 class Blogger {

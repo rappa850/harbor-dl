@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'api.dart';
+import 'offline.dart';
+import 'offline_tab.dart';
+import 'settings.dart';
 import 'video_cache.dart';
 import 'video_grid.dart';
 import 'widgets.dart';
@@ -19,7 +22,7 @@ class MePage extends StatefulWidget {
 }
 
 class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
-  late final _tabs = TabController(length: 2, vsync: this);
+  late final _tabs = TabController(length: 3, vsync: this);
   Me? _me;
   bool _busy = false;
 
@@ -106,7 +109,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
   }
 
   Future<void> _settings() async {
-    final cache = await VideoCache.open(_api.session);
+    final cache = await VideoCache.open(_api.session), settings = await AppSettings.load();
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -114,6 +117,28 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
         builder: (context, setSheet) => SafeArea(
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             ListTile(leading: const Icon(Icons.dns_outlined), title: const Text('服务器'), subtitle: Text(_api.session.server)),
+            SwitchListTile(
+                secondary: const Icon(Icons.wifi),
+                title: const Text('仅 Wi-Fi 下预加载'),
+                subtitle: const Text('移动网络只播放当前视频，不提前下载后面的'),
+                value: settings.wifiOnlyPrefetch,
+                onChanged: (on) async {
+                  await settings.setWifiOnlyPrefetch(on);
+                  setSheet(() {});
+                }),
+            ListTile(
+                leading: const Icon(Icons.storage_outlined),
+                title: const Text('缓存上限'),
+                trailing: DropdownButton<int>(
+                    value: kCacheChoices.contains(settings.cacheMb) ? settings.cacheMb : 1024,
+                    underline: const SizedBox(),
+                    items: [for (final mb in kCacheChoices) DropdownMenuItem(value: mb, child: Text(mb >= 1024 ? '${mb ~/ 1024} GB' : '$mb MB'))],
+                    onChanged: (mb) async {
+                      if (mb == null) return;
+                      await settings.setCacheMb(mb);
+                      await VideoCache(_api.session, cache.dir, limit: settings.cacheBytes).trim();
+                      setSheet(() {});
+                    })),
             ListTile(
                 leading: const Icon(Icons.cleaning_services_outlined),
                 title: const Text('清除视频缓存'),
@@ -128,6 +153,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
                 onTap: () async {
                   Navigator.pop(sheet);
                   await Session.clear();
+                  Offline.forget();
                   widget.onLogout();
                 }),
           ]),
@@ -203,7 +229,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
               ),
             ]),
           ),
-          SliverPersistentHeader(pinned: true, delegate: _TabBarDelegate(TabBar(controller: _tabs, tabs: const [Tab(text: '收藏'), Tab(text: '观看历史')]))),
+          SliverPersistentHeader(pinned: true, delegate: _TabBarDelegate(TabBar(controller: _tabs, tabs: const [Tab(text: '收藏'), Tab(text: '观看历史'), Tab(text: '离线')]))),
         ],
         body: TabBarView(controller: _tabs, children: [
           VideoGrid(
@@ -224,6 +250,7 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
               _load();
             },
           ),
+          OfflineTab(api: _api, onLogout: widget.onLogout),
         ]),
       ),
     );

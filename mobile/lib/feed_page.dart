@@ -179,7 +179,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       }
     }
     for (var k = 1; k <= kPrefetch && _index + k < _items.length; k++) {
-      _cache?.fetch(_items[_index + k]);
+      _cache?.prefetch(_items[_index + k]);
     }
     final current = _players[_index];
     if (current != null && current.value.isInitialized && !_paused && !_held) current.play();
@@ -191,7 +191,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     final item = _items[i];
     File? file = _cache?.cached(item);
     if (file == null && i != _index && _cache != null) {
-      file = await _cache!.fetch(item).timeout(const Duration(seconds: 8), onTimeout: () => null);
+      file = await _cache!.prefetch(item).timeout(const Duration(seconds: 8), onTimeout: () => null);
     }
     _opening.remove(i);
     if (!mounted || _players.containsKey(i) || (i - _index).abs() > kPreload) return;
@@ -234,6 +234,27 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('操作失败，请检查网络')));
     }
   }
+
+  Future<void> _save(FeedItem item) async {
+    final offline = _cache?.offline;
+    if (offline == null) return;
+    if (offline.has(item.id)) {
+      offline.remove(item.id);
+      setState(() {});
+      _say('已删除离线副本');
+      return;
+    }
+    setState(() {}); // shows the spinner
+    _say('开始保存到手机');
+    final ok = await offline.add(item);
+    if (!mounted) return;
+    setState(() {});
+    _say(ok ? '已保存，可在“我的 → 离线”里查看' : '保存失败，请检查网络');
+  }
+
+  void _say(String text) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 2)));
 
   void _speed(bool fast) {
     _players[_index]?.setPlaybackSpeed(fast ? 2.0 : 1.0);
@@ -305,6 +326,9 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
                 onToggle: _toggle,
                 onFavorite: (on) => _favorite(_items[i], on),
                 onSpeed: _speed,
+                saved: _cache?.offline?.has(_items[i].id) ?? false,
+                saving: _cache?.offline?.downloading(_items[i].id) ?? false,
+                onSave: _cache?.offline == null ? null : () => _save(_items[i]),
                 onAuthor: widget.onAuthor == null || _items[i].author.isEmpty ? null : () => _author(_items[i].author)),
           ),
         ),

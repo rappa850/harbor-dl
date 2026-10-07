@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -16,7 +18,10 @@ class VideoTile extends StatefulWidget {
       required this.onToggle,
       required this.onFavorite,
       required this.onSpeed,
-      required this.onAuthor});
+      required this.onAuthor,
+      this.saved = false,
+      this.saving = false,
+      this.onSave});
 
   final FeedItem item;
   final Session session;
@@ -26,6 +31,10 @@ class VideoTile extends StatefulWidget {
   final void Function(bool on) onFavorite;
   final void Function(bool fast) onSpeed;
   final VoidCallback? onAuthor;
+
+  /// Offline copy state; [onSave] toggles it (null hides the button).
+  final bool saved, saving;
+  final VoidCallback? onSave;
 
   @override
   State<VideoTile> createState() => _VideoTileState();
@@ -66,7 +75,9 @@ class _VideoTileState extends State<VideoTile> {
       onLongPressEnd: (_) => widget.onSpeed(false),
       child: Stack(fit: StackFit.expand, children: [
         // the cover stays underneath until the first frame is ready, so a swipe never shows black
-        if (item.cover != null)
+        if (item.localCover != null)
+          Image.file(File(item.localCover!), fit: BoxFit.contain, errorBuilder: (_, _, _) => const SizedBox())
+        else if (item.cover != null)
           CachedNetworkImage(
               imageUrl: session.url(item.cover!),
               httpHeaders: session.headers,
@@ -123,6 +134,14 @@ class _VideoTileState extends State<VideoTile> {
                 onPressed: () => widget.onFavorite(!item.favorite),
                 icon: Icon(item.favorite ? Icons.favorite : Icons.favorite_border, color: item.favorite ? Colors.redAccent : Colors.white),
               ),
+              if (widget.onSave != null)
+                IconButton(
+                    iconSize: 32,
+                    tooltip: widget.saved ? '删除离线副本' : '保存到手机',
+                    onPressed: widget.saving ? null : widget.onSave,
+                    icon: widget.saving
+                        ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(widget.saved ? Icons.download_done : Icons.download_outlined, color: widget.saved ? Colors.lightGreenAccent : Colors.white)),
               if (widget.onAuthor != null)
                 IconButton(
                     iconSize: 32,
