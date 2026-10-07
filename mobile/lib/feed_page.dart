@@ -5,6 +5,7 @@ import 'package:video_player/video_player.dart';
 
 import 'api.dart';
 import 'feed_tile.dart';
+import 'pip.dart';
 import 'video_cache.dart';
 
 /// How many neighbours on each side keep a prepared (initialised, paused) player.
@@ -63,11 +64,16 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   bool _loading = false, _done = false, _paused = false, _fast = false, _held = false;
   late int _index = widget.initial?.index ?? 0;
   late final String _seed = DateTime.now().millisecondsSinceEpoch.toString();
+  bool _pipSupported = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    Pip.inPip.addListener(_onPip);
+    Pip.supported().then((ok) {
+      if (mounted) setState(() => _pipSupported = ok);
+    });
     final initial = widget.initial;
     if (initial != null) {
       _items.addAll(initial.items);
@@ -97,9 +103,20 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     if (old.active != widget.active) _hold(!widget.active);
   }
 
+  void _onPip() {
+    if (mounted) setState(() {});
+  }
+
+  /// The system may shrink the app into a window only while this feed is on top and a video is playing.
+  void _allowPip() {
+    final player = _players[_index];
+    Pip.allow(mounted && widget.active && !_held && !_paused && player != null && player.value.isInitialized);
+  }
+
   /// Pause while something covers the feed (another tab, the author page); resume afterwards unless the user paused.
   void _hold(bool on) {
     _held = on;
+    _allowPip();
     final player = _players[_index];
     if (on) {
       _report(_index);
@@ -121,6 +138,8 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     _report(_index);
+    Pip.allow(false);
+    Pip.inPip.removeListener(_onPip);
     WidgetsBinding.instance.removeObserver(this);
     for (final player in _players.values) {
       player.dispose();
@@ -131,11 +150,13 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
+    // `inactive` also happens for the notification shade and while the window shrinks into picture-in-picture,
+    // so only a real trip to the background pauses (and not while floating)
+    if (state == AppLifecycleState.resumed) {
+      if (!_paused && !_held) _players[_index]?.play();
+    } else if (state != AppLifecycleState.inactive && !Pip.inPip.value) {
       _report(_index);
       _players[_index]?.pause();
-    } else if (!_paused && !_held) {
-      _players[_index]?.play();
     }
   }
 
@@ -216,6 +237,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     }
     setState(() {});
     if (i == _index && !_paused && !_held) controller.play();
+    if (i == _index) _allowPip();
   }
 
   /// Remember how far the user got in page [i] (fire and forget).
@@ -268,6 +290,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
     _paused = false;
     _fast = false;
     _sync();
+    _allowPip();
     if (index >= _items.length - 5) _more();
   }
 
@@ -278,6 +301,7 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
       _paused = player.value.isPlaying;
       _paused ? player.pause() : player.play();
     });
+    _allowPip();
   }
 
   String get _emptyText => switch (widget.mode) {
@@ -328,11 +352,13 @@ class _FeedPageState extends State<FeedPage> with WidgetsBindingObserver {
                 onSpeed: _speed,
                 saved: _cache?.offline?.has(_items[i].id) ?? false,
                 saving: _cache?.offline?.downloading(_items[i].id) ?? false,
+                bare: Pip.inPip.value,
+                onPip: _pipSupported ? Pip.enter : null,
                 onSave: _cache?.offline == null ? null : () => _save(_items[i]),
                 onAuthor: widget.onAuthor == null || _items[i].author.isEmpty ? null : () => _author(_items[i].author)),
           ),
         ),
-        if (header != null) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),
+        if (header != null && !Pip.inPip.value) Positioned(top: 0, left: 0, right: 0, child: SafeArea(child: header)),
       ]),
     );
   }

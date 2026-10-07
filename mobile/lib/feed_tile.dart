@@ -21,7 +21,9 @@ class VideoTile extends StatefulWidget {
       required this.onAuthor,
       this.saved = false,
       this.saving = false,
-      this.onSave});
+      this.onSave,
+      this.bare = false,
+      this.onPip});
 
   final FeedItem item;
   final Session session;
@@ -35,6 +37,10 @@ class VideoTile extends StatefulWidget {
   /// Offline copy state; [onSave] toggles it (null hides the button).
   final bool saved, saving;
   final VoidCallback? onSave;
+
+  /// Only the picture, for the picture-in-picture window; [onPip] shrinks the app into it (null hides the button).
+  final bool bare;
+  final VoidCallback? onPip;
 
   @override
   State<VideoTile> createState() => _VideoTileState();
@@ -110,6 +116,7 @@ class _VideoTileState extends State<VideoTile> {
               ),
             ),
           ),
+        if (!widget.bare)
         Positioned(
           left: 16,
           right: 88,
@@ -123,6 +130,7 @@ class _VideoTileState extends State<VideoTile> {
             ]),
           ),
         ),
+        if (!widget.bare)
         Positioned(
           right: 8,
           bottom: 48,
@@ -142,6 +150,12 @@ class _VideoTileState extends State<VideoTile> {
                     icon: widget.saving
                         ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
                         : Icon(widget.saved ? Icons.download_done : Icons.download_outlined, color: widget.saved ? Colors.lightGreenAccent : Colors.white)),
+              if (widget.onPip != null)
+                IconButton(
+                    iconSize: 30,
+                    tooltip: '小窗播放',
+                    onPressed: widget.onPip,
+                    icon: const Icon(Icons.picture_in_picture_alt_outlined, color: Colors.white)),
               if (widget.onAuthor != null)
                 IconButton(
                     iconSize: 32,
@@ -151,14 +165,14 @@ class _VideoTileState extends State<VideoTile> {
             ]),
           ),
         ),
-        if (ready)
+        if (ready && !widget.bare)
           Positioned(
               left: 0,
               right: 0,
               bottom: 0,
               child: VideoProgressIndicator(controller,
-                  allowScrubbing: false,
-                  padding: EdgeInsets.zero,
+                  allowScrubbing: true,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
                   colors: const VideoProgressColors(playedColor: Colors.white, bufferedColor: Colors.white24, backgroundColor: Colors.transparent))),
       ]),
     );
