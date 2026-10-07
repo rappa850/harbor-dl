@@ -72,6 +72,8 @@ class Store:
                     subscription_id TEXT PRIMARY KEY, last_checked_at TEXT, last_success_at TEXT,
                     last_error TEXT, last_mode TEXT, last_new_count INTEGER NOT NULL DEFAULT 0,
                     last_queued_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS media_probe (
+                    asset_id TEXT PRIMARY KEY, duration REAL, probed_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS favorites (
                     user_id INTEGER NOT NULL, asset_id TEXT NOT NULL, created_at REAL NOT NULL,
                     PRIMARY KEY(user_id,asset_id));

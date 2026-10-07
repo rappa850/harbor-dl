@@ -32,9 +32,16 @@ def decode_cursor(cursor):
     return offset
 
 
+def prune(store):
+    """Forget favorites, history and probe results of media that no longer exists in the library."""
+    with store.connect() as db:
+        for table, column in (('favorites', 'asset_id'), ('watch_history', 'asset_id'), ('media_probe', 'asset_id')):
+            db.execute(f'DELETE FROM {table} WHERE {column} NOT IN (SELECT id FROM media_assets)')
+
+
 class Feed:
-    def __init__(self, store, assets, covers, key_for):
-        self.store, self.assets, self.covers, self.key_for = store, assets, covers, key_for
+    def __init__(self, store, assets, covers, key_for, probe=None):
+        self.store, self.assets, self.covers, self.key_for, self.probe = store, assets, covers, key_for, probe
 
     def _playable(self, author):
         rows = []
@@ -74,13 +81,15 @@ class Feed:
             rows.sort(key=lambda row: (row['created_at'] or '', row['path']), reverse=True)
         chunk = rows[offset:offset + limit]
         more = offset + limit < len(rows)
-        return {'items': [self._item(row, row['id'] in favorites, history.get(row['id'])) for row in chunk], 'total': len(rows),
+        lengths = self.probe.durations(chunk) if self.probe else {}
+        return {'items': [self._item(row, row['id'] in favorites, history.get(row['id']), lengths.get(row['id']))
+                          for row in chunk], 'total': len(rows),
                 'next': encode_cursor(offset + limit) if more else None}
 
-    def _item(self, row, favorite=False, seen=None):
+    def _item(self, row, favorite=False, seen=None, length=None):
         return {'favorite': favorite, 'position': seen['position'] if seen else 0,
                 'id': row['id'], 'kind': 'video', 'title': row['title'], 'author': row['author'] or '',
                 'source': row['source'], 'subscription_id': row['subscription_id'],
-                'duration': row['duration'], 'created_at': row['created_at'],
+                'duration': row['duration'] if row['duration'] is not None else length, 'created_at': row['created_at'],
                 'cover': self.covers.local(row['work_url']) or f"/api/files/{row['id']}/poster",
                 'stream': f"/api/files/{row['id']}/stream"}

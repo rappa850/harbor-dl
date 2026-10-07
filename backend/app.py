@@ -32,7 +32,9 @@ from .network import NetworkConfig
 from .player import PlaybackRecords, metadata, srt_to_vtt, subtitle_list
 from .task_query import TaskQuery
 from .logs import FailureLog
-from .feed import Feed
+from .feed import Feed, prune
+from .login_limit import LoginLimit
+from .probe import Probe
 from .bloggers import Bloggers
 from .library_covers import run_ffmpeg
 from .api_tokens import ApiTokens
@@ -314,24 +316,33 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
             account = {'id': cursor.lastrowid, 'username': payload.username}
         return set_session(response, account, request)
 
-    @app.post('/api/auth/login')
-    def login(payload: LoginInput, response: Response, request: Request):
+    login_limit = app.state.login_limit = LoginLimit()
+
+    def checked_account(payload, request: Request):
+        """The account for these credentials; wrong ones count against the caller's address and eventually pause it."""
+        address = request.client.host if request.client else ''
+        wait = login_limit.wait(address, payload.username)
+        if wait:
+            raise HTTPException(429, f'尝试次数过多，请 {wait} 秒后再试', headers={'Retry-After': str(wait)})
         account = store.one('SELECT * FROM users WHERE username=?', (payload.username,))
         # Run the same expensive hash path even for an unknown account.
         dummy = '0' * 32 + '$' + '0' * 64
         matched = password_matches(payload.password, account['password'] if account else dummy)
         if not account or not matched:
+            login_limit.fail(address, payload.username)
             raise HTTPException(401, '用户名或密码错误')
+        login_limit.succeed(address, payload.username)
+        return account
+
+    @app.post('/api/auth/login')
+    def login(payload: LoginInput, response: Response, request: Request):
+        account = checked_account(payload, request)
         return set_session(response, account, request, payload.remember)
 
     @app.post('/api/auth/app-login')
-    def app_login(payload: AppLoginInput):
+    def app_login(payload: AppLoginInput, request: Request):
         """Sign in from a native app: returns a revocable API token (shown once) instead of a cookie."""
-        account = store.one('SELECT * FROM users WHERE username=?', (payload.username,))
-        dummy = '0' * 32 + '$' + '0' * 64
-        matched = password_matches(payload.password, account['password'] if account else dummy)
-        if not account or not matched:
-            raise HTTPException(401, '用户名或密码错误')
+        account = checked_account(payload, request)
         issued = api_tokens.create(account['id'], payload.device[:64] or 'Harbor App', 365)
         return {'token': issued['token'], 'token_id': issued['id'], 'username': account['username']}
 
@@ -420,6 +431,12 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         drop_picture(avatar_dir, account['id'])
         return {'avatar': None}
 
+    probe = app.state.probe = Probe(store, manager.assets)
+    prune(store)
+
+    def make_feed(probing=True):
+        return Feed(store, manager.assets, covers, key_for, probe if probing else None)
+
     @app.get('/api/auth/background')
     def get_background(account=Depends(user)):
         return serve_picture(background_dir, account['id'], '尚未设置主页背景')
@@ -437,7 +454,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     @app.get('/api/app/me')
     def app_me(account=Depends(user)):
         """Everything the app's profile tab shows in one call."""
-        feed = Feed(store, manager.assets, covers, key_for)
+        feed = make_feed(probing=False)
         # counted through the feed so deleted files do not inflate the numbers
         total = lambda mode: feed.page(account['id'], limit=1, mode=mode)['total']
         return {'username': account['username'], 'avatar': avatar_version(account['id']),
@@ -635,19 +652,19 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     def feed(cursor: str = '', limit: int = 20, mode: str = 'latest', seed: str = '', author: str = '',
              account=Depends(user)):
         try:
-            return Feed(store, manager.assets, covers, key_for).page(account['id'], cursor, limit, mode, seed, author)
+            return make_feed().page(account['id'], cursor, limit, mode, seed, author)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
     @app.get('/api/authors')
     def authors(account=Depends(user)):
-        return {'items': Feed(store, manager.assets, covers, key_for).authors()}
+        return {'items': make_feed().authors()}
 
     def bloggers():
         def prefetch(url):
             # these endpoints run in a worker thread; the download itself belongs on the event loop
             anyio_thread.run_sync(covers.fetch_later, url, url, network.for_url(url))
-        return Bloggers(Feed(store, manager.assets, covers, key_for), store, covers, prefetch)
+        return Bloggers(make_feed(), store, covers, prefetch)
 
     @app.get('/api/bloggers')
     def blogger_list(q: str = Query(default='', max_length=128), sort: str = 'recent', account=Depends(user)):

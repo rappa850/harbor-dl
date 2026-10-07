@@ -124,6 +124,7 @@ class Api {
       return Session(base, response.data['token'] as String);
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) throw '用户名或密码错误';
+      if (e.response?.statusCode == 429) throw '尝试次数过多，请稍后再试';
       if (e.response?.statusCode == 422) throw '用户名或密码格式不正确';
       throw '无法连接到 $base';
     }
