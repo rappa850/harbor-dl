@@ -11,7 +11,7 @@ const KINDS=[
   {id:'youtube_playlist',label:'YouTube 歌单',hint:'歌单链接或 PL 开头的歌单标识',placeholder:'https://www.youtube.com/playlist?list=PL…',platform:'youtube_playlist'},
   {id:'bilibili',label:'B 站作者',hint:'作者空间链接',placeholder:'https://space.bilibili.com/用户标识',platform:'bilibili'}
 ]
-const kind=ref('douyin'),link=ref(''),nickname=ref(''),interval=ref(28800),autoDownload=ref(true)
+const kind=ref('douyin'),link=ref(''),nickname=ref(''),interval=ref(28800),autoDownload=ref(false)
 const busy=ref(false),error=ref(''),input=ref(null)
 const current=computed(()=>KINDS.find(k=>k.id===kind.value))
 const needsLogin=computed(()=>kind.value==='douyin')
@@ -47,7 +47,7 @@ onMounted(()=>input.value?.focus())
           <label class="field"><span class="field-label">自定义昵称 <em>可选</em></span><input v-model="nickname" :disabled="busy" maxlength="256" placeholder="留空使用平台名称"></label>
           <label class="field"><span class="field-label">检查频率</span><select v-model.number="interval" :disabled="busy"><option v-for="i in INTERVALS" :key="i.value" :value="i.value">{{i.label}}</option></select></label>
         </div>
-        <label class="switch-row"><input v-model="autoDownload" type="checkbox" :disabled="busy"><span class="switch" aria-hidden="true"></span><span><strong>发现新作品时自动下载</strong><small>关闭后只记录作品，需要时再手动下载。</small></span></label>
+        <label class="switch-row"><input v-model="autoDownload" type="checkbox" :disabled="busy"><span class="switch" aria-hidden="true"></span><span><strong>发现新作品时自动下载</strong><small>默认关闭：只记录作品，需要时在作品列表里手动下载。开启后，首次扫描到的作品也会立即加入下载队列。</small></span></label>
         <p v-if="error" class="inline-error" role="alert">{{error}}</p>
         <footer class="dialog-actions"><button type="button" class="btn" :disabled="busy" @click="emit('close')">取消</button><button class="btn primary" :disabled="busy">{{busy?'正在解析…':'解析并添加'}}</button></footer>
       </form>
