@@ -128,10 +128,9 @@ class LibraryExporter:
             raise Skipped('任务尚未完成')
         assets = self.store.all('SELECT path,kind,is_primary FROM media_assets WHERE task_id=? ORDER BY path', (task_id,))
         primary = next((a for a in assets if a['path'] == task['file_path']), None)
-        if primary is None or primary['kind'] == 'image':
-            raise Skipped('图集作品不导出到媒体库')
-        if primary['kind'] != 'video':
-            raise Skipped('仅导出视频作品')
+        if primary is None or primary['kind'] not in ('video', 'image'):
+            raise Skipped('仅导出视频和图集作品')
+        gallery = primary['kind'] == 'image'
         try:
             video = self.manager.assets.path(task['file_path'])
         except ValueError as exc:
@@ -152,6 +151,9 @@ class LibraryExporter:
             'author': sub.get('nickname') or task['author'] or platform_label(platform), 'avatar_url': sub.get('avatar_url'),
             'author_id': sub.get('user_id'), 'premiered': stamp[:10] if re.match(r'\d{4}-\d{2}-\d{2}', stamp) else '',
             'duration': meta.get('duration'), 'cover_url': meta.get('cover_url'), 'source_url': task['url'],
+            'gallery': gallery,
+            'pictures': [self.manager.root / a['path'] for a in assets if a['kind'] == 'image'] if gallery else [],
+            'music': [self.manager.root / a['path'] for a in assets if a['kind'] == 'audio'] if gallery else [],
             'thumbnails': [self.manager.root / a['path'] for a in assets if a['kind'] == 'image'],
             'subtitles': [self.manager.root / a['path'] for a in assets if Path(a['path']).suffix.lower() in SUBTITLES]}
 
@@ -178,10 +180,25 @@ class LibraryExporter:
         old = self.read_manifest(folder)
         changed = []
 
-        ext = ctx['video'].suffix.lower()
-        how = await asyncio.to_thread(link_or_copy, ctx['video'], folder / f'{stem}{ext}')
-        files = [{'name': f'{stem}{ext}', 'role': 'video'}]
-        changed += [] if how == 'kept' else [how]
+        files = []
+        if ctx['gallery']:
+            # A picture post has no video: pictures keep their order as 001, 002, ...; the music sits beside the NFO.
+            width = max(3, len(str(len(ctx['pictures']))))
+            for number, picture in enumerate(ctx['pictures'], 1):
+                name = f'{number:0{width}d}{picture.suffix.lower()}'
+                how = await asyncio.to_thread(link_or_copy, picture, folder / name)
+                files.append({'name': name, 'role': 'image'})
+                changed += [] if how == 'kept' else [how]
+            for number, music in enumerate(ctx['music'], 1):
+                name = f'{stem}.bgm{music.suffix.lower()}' if number == 1 else f'{stem}.bgm{number}{music.suffix.lower()}'
+                how = await asyncio.to_thread(link_or_copy, music, folder / name)
+                files.append({'name': name, 'role': 'audio'})
+                changed += [] if how == 'kept' else [how]
+        else:
+            ext = ctx['video'].suffix.lower()
+            how = await asyncio.to_thread(link_or_copy, ctx['video'], folder / f'{stem}{ext}')
+            files.append({'name': f'{stem}{ext}', 'role': 'video'})
+            changed += [] if how == 'kept' else [how]
         for sub in ctx['subtitles']:
             tail = sub.name[len(ctx['video'].stem):] if sub.name.startswith(ctx['video'].stem) else f'.{sub.suffix.lstrip(".")}'
             await asyncio.to_thread(link_or_copy, sub, folder / f'{stem}{tail}')
@@ -285,7 +302,7 @@ class LibraryExporter:
             raise LibraryError('批量导出正在进行')
         self.check_root(self.config()['root'])
         ids = [r['id'] for r in self.store.all("SELECT id FROM tasks WHERE status='COMPLETED' AND file_path IS NOT NULL ORDER BY updated_at")]
-        self.state = {'state': 'running', 'total': len(ids), 'done': 0, 'exported': 0, 'unchanged': 0, 'skipped': 0, 'galleries': 0,
+        self.state = {'state': 'running', 'total': len(ids), 'done': 0, 'exported': 0, 'unchanged': 0, 'skipped': 0,
                       'failed': 0, 'frames': 0, 'no_cover': 0, 'errors': [], 'started_at': now()}
         self.job = asyncio.get_running_loop().create_task(self.run_all(ids, overwrite))
 
@@ -298,7 +315,7 @@ class LibraryExporter:
                 state['frames'] += result['cover_source'] == 'frame'
                 state['no_cover'] += result['cover_source'] is None
             except Skipped as exc:
-                state['galleries' if '图集' in str(exc) else 'skipped'] += 1
+                state['skipped'] += 1
             except (LibraryError, OSError, ValueError) as exc:
                 state['failed'] += 1
                 state['errors'] = [*state['errors'][-9:], f'{task_id[:8]}：{exc}']

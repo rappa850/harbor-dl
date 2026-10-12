@@ -30,6 +30,7 @@ SEC_UID = re.compile(r'^[A-Za-z0-9_\-]{12,}$')
 PAGE_SIZE = 18
 RETRIES = 3
 MAX_PAGES = 1000
+LOGIN_CODES = (8, 2154)   # status codes the web client answers when the session is missing or expired
 RISK_HINT = '抖音没有返回数据，可能触发风控或 Cookie 无效；请在设置中更新抖音 Cookie 后重试'
 
 
@@ -203,23 +204,25 @@ class DouyinAdapter(SubscriptionAdapter):
         if cookie:headers['cookie'] = cookie
         # The platform answers 403 / an empty body intermittently (risk control); a new signature a moment later
         # usually passes, so retry a couple of times before reporting the failure.
-        failure = None
+        failure, auth_hint = None, False
         for attempt in range(RETRIES):
             if attempt:await self.sleep(random.uniform(1.5, 3.5) * attempt)
             try:response = await client.get(self.signed_url(path, params, cookie), headers=headers)
             except httpx.HTTPError as exc:raise PlatformError(f'抖音请求失败：{exc.__class__.__name__}') from exc
             if response.status_code >= 400:
                 if 'Uifid Not Found' in response.text:
-                    raise PlatformError('抖音要求设备标识 UIFID，已保存的登录状态里没有，请重新登录抖音后再试')
+                    raise PlatformError('抖音要求设备标识 UIFID，已保存的登录状态里没有，请重新登录抖音后再试', auth=True)
                 failure = f'抖音请求被拒绝（HTTP {response.status_code}），可能触发风控';continue
-            if not response.content.strip():failure = RISK_HINT;continue
+            if not response.content.strip():failure = RISK_HINT;auth_hint = not cookie;continue
             try:data = response.json()
             except ValueError:failure = RISK_HINT;continue
             failure = None;break
-        if failure:raise PlatformError(failure)
+        if failure:raise PlatformError(failure, auth=auth_hint)
         if not isinstance(data, dict):raise PlatformError('抖音返回了无法识别的数据')
         code = data.get('status_code')
-        if code not in (0, None):raise PlatformError(f'抖音返回错误 {code}：{data.get("status_msg") or "未知"}')
+        if code not in (0, None):
+            message = str(data.get('status_msg') or '未知')
+            raise PlatformError(f'抖音返回错误 {code}：{message}', auth=code in LOGIN_CODES or '登录' in message)
         return data
 
     async def sec_uid_for(self, client, text):
@@ -286,6 +289,7 @@ class DouyinAdapter(SubscriptionAdapter):
                     raise PlatformError('抖音分页游标异常，未保存此次读取')
                 cursor = next_cursor
                 if known is not None and not fresh:break
+                if known is not None and result.pages >= limit:result.truncated = True
         return result
 
     async def aweme_id_for(self, client, url):

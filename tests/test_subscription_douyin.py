@@ -232,6 +232,20 @@ class CheckTests(DouyinCase):
         self.assertEqual(len(self.fake.calls('/aweme/post/')),1+2)
         self.assertEqual(self.client.get('/api/tasks?subscription_id='+item['id']).json()['total'],5)
 
+    def test_check_reports_when_the_page_limit_may_hide_more_new_works(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(1)]]);self.client.post(base+'/check')
+        self.fake.serve([[aweme(100+n*10+k) for k in range(3)] for n in range(8)])
+        result=self.client.post(base+'/check').json()
+        self.assertEqual(result['pages'],5);self.assertTrue(result['may_have_more'])
+        self.assertTrue(self.client.get(base).json()['runtime']['more_available'])
+        self.fake.serve([[aweme(1)]])
+        self.assertFalse(self.client.post(base+'/check').json()['may_have_more'])
+        self.assertFalse(self.client.get(base).json()['runtime']['more_available'])
+        self.fake.serve([[aweme(100+n*10+k) for k in range(3)] for n in range(8)]);self.client.post(base+'/check')
+        self.fake.serve([[aweme(500)]]);self.client.post(base+'/sync')
+        self.assertFalse(self.client.get(base).json()['runtime']['more_available'])
+
     def test_auto_download_off_and_failure_state(self):
         item,base=self.make(False)
         self.fake.serve([[aweme(1)]]);result=self.client.post(base+'/check').json()
@@ -242,6 +256,30 @@ class CheckTests(DouyinCase):
         state=self.client.get(base).json()['runtime']
         self.assertIn('Cookie',state['last_error']);self.assertTrue(state['last_success_at'])
         self.assertEqual(self.client.get(base+'/videos').json()['total'],1)
+
+    def test_expired_login_is_flagged_and_cleared_by_a_good_check(self):
+        item,base=self.make(False)
+        self.client.put('/api/network/cookies/douyin',json={'cookie_content':'ttwid=t; UIFID=device-123'})
+        self.fake.empty=True
+        self.assertEqual(self.client.post(base+'/check').status_code,502)
+        self.assertFalse(self.client.get(base).json()['runtime']['auth_expired'],'an empty answer with a saved login is risk control')
+        self.fake.pages={};self.fake.profile={}
+        def expired(request):return httpx.Response(200,json={'status_code':8,'status_msg':'未登录'})
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(expired)
+        self.assertEqual(self.client.post(base+'/check').status_code,502)
+        self.assertTrue(self.client.get(base).json()['runtime']['auth_expired'])
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(self.fake)
+        self.fake.empty=False;self.fake.serve([[aweme(1)]])
+        self.assertEqual(self.client.post(base+'/check').status_code,200)
+        self.assertFalse(self.client.get(base).json()['runtime']['auth_expired'])
+
+    def test_failed_sync_with_expired_login_is_flagged(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(1)]]);self.client.post(base+'/check')
+        def expired(request):return httpx.Response(200,json={'status_code':8,'status_msg':'未登录'})
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(expired)
+        self.assertEqual(self.client.post(base+'/sync').status_code,502)
+        self.assertTrue(self.client.get(base).json()['runtime']['auth_expired'])
 
     def test_busy_missing_and_unsupported(self):
         item,base=self.make(False)

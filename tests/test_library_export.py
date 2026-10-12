@@ -200,13 +200,29 @@ class ExportTests(unittest.TestCase):
         self.assertFalse([a for a in self.client.get('/api/files?attachments=true').json()['items'] if a['name'].endswith('.nfo')])
         self.assertTrue(self.export(task).json()['nfo_kept'])                              # and the edit survives the next export
 
-    def test_gallery_and_audio_are_not_exported(self):
-        task = self.work(name='pic [1].jpg', video=png(4, 4))
-        self.assertEqual(self.export(task).status_code, 422)
-        self.assertIn('图集', self.export(task).json()['detail'] if 'detail' in self.export(task).json() else self.export(task).text)
+    def test_audio_only_work_is_not_exported(self):
         audio = self.work(name='song [2].mp3', video=b'ID3')
         self.assertEqual(self.export(audio).status_code, 422)
         self.assertEqual(self.client.post('/api/library/export/tasks/nope').status_code, 422)
+
+    def test_gallery_exports_numbered_pictures_music_nfo_and_poster(self):
+        task = self.work(name='pic [8].jpg', video=jpeg(30, 40))
+        folder = self.app.state.manager.root / task['id']
+        (folder / 'pic [8]_2.jpg').write_bytes(jpeg(30, 40))
+        (folder / 'pic [8]_bgm.mp3').write_bytes(b'ID3')
+        with self.app.state.store.connect() as db:
+            self.app.state.manager.assets.register(db, dict(db.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()))
+        result = self.export(task)
+        self.assertEqual(result.status_code, 200, result.text)
+        out = Path(result.json()['folder'])
+        names = sorted(p.name for p in out.iterdir())
+        self.assertIn('001.jpg', names);self.assertIn('002.jpg', names)
+        self.assertTrue(any(n.endswith('.bgm.mp3') for n in names))
+        self.assertTrue(next(out.glob('*.nfo')).is_file());self.assertTrue(any(n.startswith('poster.') for n in names))
+        manifest = json.loads((out / '.harbor.json').read_text(encoding='utf-8'))
+        self.assertTrue({'audio', 'image', 'nfo', 'poster'} <= {f['role'] for f in manifest['files']})
+        ET.fromstring(next(out.glob('*.nfo')).read_bytes())
+        self.assertEqual(self.export(task).json()['status'], 'unchanged')
 
     def test_poster_fallbacks(self):
         task = self.work()
@@ -282,8 +298,8 @@ class ExportTests(unittest.TestCase):
                     break
                 time.sleep(0.05)
             self.assertEqual(state['state'], 'done')
-            self.assertEqual((state['total'], state['exported'], state['galleries'], state['failed']), (4, 3, 1, 0))
-            self.assertEqual(len(list(self.library.glob('*/*/.harbor.json'))), 3)
+            self.assertEqual((state['total'], state['exported'], state['skipped'], state['failed']), (4, 4, 0, 0))
+            self.assertEqual(len(list(self.library.glob('*/*/.harbor.json'))), 4)
             self.assertEqual(self.client.post('/api/library/export').status_code, 200)         # a finished job can be run again
 
     def test_auto_export_after_download_when_enabled(self):

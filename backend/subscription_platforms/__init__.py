@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 
 
 class PlatformError(Exception):
-    """Upstream platform failure (risk control, expired cookie, bad payload); not a user input error."""
+    """Upstream platform failure (risk control, expired cookie, bad payload); not a user input error.
+    auth=True means the saved login is missing or no longer accepted and the user has to sign in again."""
+    def __init__(self, message='', auth=False):
+        super().__init__(message)
+        self.auth = auth
 
 
 @dataclass
@@ -18,6 +22,7 @@ class FetchResult:
     pages: int = 0
     complete: bool = False                        # True when the platform reported no further pages
     skipped: int = 0
+    truncated: bool = False                       # stopped at the page limit while pages still looked new
 
 
 class SubscriptionAdapter:

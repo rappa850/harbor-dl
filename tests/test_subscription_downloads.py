@@ -83,12 +83,12 @@ class SubscriptionDownloadTests(unittest.TestCase):
         self.assertEqual(self.current()['status'],'cancelled')
         replacement=self.client.post(self.url,json={}).json()
         with self.app.state.store.connect() as db:
-            db.execute('UPDATE tasks SET status=? WHERE id=?',('PROCESSING',replacement['id']))
+            db.execute('UPDATE tasks SET status=?,resumes=3 WHERE id=?',('PROCESSING',replacement['id']))
         async def restart():
             await self.manager.start();await self.manager.stop()
         asyncio.run(restart())
         self.assertEqual(self.current()['status'],'failed')
-        self.assertIn('退出',self.current()['error_message'])
+        self.assertIn('中断',self.current()['error_message'])
 
     def test_explicit_redownload_retains_original_file_and_ignores_old_events(self):
         task=self.client.post(self.url,json={}).json()

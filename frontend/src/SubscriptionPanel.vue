@@ -52,10 +52,11 @@ const visible=computed(()=>{
   return (items.value||[]).filter(i=>(!f||f.match(i.platform))&&(!q||`${i.nickname} ${i.user_id} ${i.storage_name}`.toLowerCase().includes(q)))
 })
 const totals=computed(()=>{const l=items.value||[];return {subs:l.length,works:l.reduce((n,i)=>n+(i.runtime.stored_videos||0),0),
-  auto:l.filter(i=>i.runtime.next_check_at).length,failing:l.filter(i=>i.runtime.last_error).length}})
+  auto:l.filter(i=>i.runtime.next_check_at).length,failing:l.filter(i=>i.runtime.last_error||i.runtime.auth_expired).length}})
 function state(i){
   if(i.runtime.is_syncing||checking.value[i.id]||syncing.value[i.id])return {tone:'info',text:'检查中'}
   if(i.status==='paused'||!Number(i.update_interval))return {tone:'idle',text:'已暂停'}
+  if(i.runtime.auth_expired)return {tone:'bad',text:'需要重新登录'}
   if(i.runtime.last_error)return {tone:'bad',text:'检查失败'}
   if(!i.runtime.check_available)return {tone:'idle',text:'手动同步'}
   return {tone:'ok',text:'自动检查'}
@@ -159,10 +160,14 @@ watch(addOpen,v=>{if(v)loadCookie()})
           <div class="sync-body"><span>{{progressView(selected).text}}</span>
             <div class="sync-bar" :class="{indeterminate:progressView(selected).pct===null&&!progressView(selected).queued,queued:progressView(selected).queued}" role="progressbar" :aria-valuenow="progressView(selected).pct??undefined" aria-valuemin="0" aria-valuemax="100"><i :style="progressView(selected).pct!==null?{width:progressView(selected).pct+'%'}:null"></i></div>
             <small>作品多时需要几分钟，可以离开此页，同步会继续。</small></div></div>
-        <div v-if="errors[selected.id]||selected.runtime.last_error" class="notice bad" role="alert"><Icon name="alert" :size="16"/>
+        <div v-if="selected.runtime.auth_expired&&!errors[selected.id]" class="notice bad" role="alert"><Icon name="key" :size="16"/>
+          <span><strong>抖音登录已失效：</strong>自动检查已无法读取作品，请重新登录后再检查。</span>
+          <button class="link" @click="loginOpen=true">重新登录抖音</button></div>
+        <div v-else-if="errors[selected.id]||selected.runtime.last_error" class="notice bad" role="alert"><Icon name="alert" :size="16"/>
           <span><strong>{{errors[selected.id]?'操作失败':'最近一次检查失败'}}：</strong>{{errors[selected.id]||selected.runtime.last_error}}</span>
           <button v-if="selected.platform==='douyin'" class="link" @click="loginOpen=true">{{cookieSaved?'重新登录抖音':'登录抖音'}}</button></div>
         <div v-else-if="selected.platform==='douyin'&&!cookieSaved" class="notice warn"><Icon name="key" :size="16"/><span>还没有保存抖音登录状态，读取博主作品会被平台拒绝。</span><button class="link" @click="loginOpen=true">立即登录</button></div>
+        <div v-else-if="selected.runtime.more_available" class="notice warn"><Icon name="alert" :size="16"/><span>最近一次检查读满了页数上限，可能还有更早的新作品没有读到，建议执行“全量同步历史作品”。</span></div>
         <div v-else-if="!selected.runtime.check_available&&selected.runtime.unavailable_reason" class="notice idle"><Icon name="alert" :size="16"/><span>{{selected.runtime.unavailable_reason}}</span></div>
         <p v-if="selected.runtime.check_available" class="check-line"><Icon name="clock" :size="14"/> 上次检查 {{relative(selected.runtime.last_checked_at)}}<template v-if="selected.runtime.last_mode"> · {{selected.runtime.last_mode==='scheduled'?'自动':'手动'}}，新增 {{selected.runtime.last_new_count}} 项，加入下载 {{selected.runtime.last_queued_count}} 项</template><template v-if="selected.runtime.next_check_at"> · 下次检查 {{relative(selected.runtime.next_check_at,true)}}</template></p>
 

@@ -127,7 +127,7 @@ library/
 - 视频、封面、NFO 在同一个文件夹里；封面来自本地缓存，没有缓存时从视频截取一帧。
 - 在 Docker 里要让 Jellyfin / Emby 读到这个目录，把它挂载出来：`- /你的媒体库路径:/data/library`，并让 Jellyfin / Emby 的容器挂载同一个路径。
 - 在「编辑 NFO」里改过的内容不会被后续自动导出覆盖。
-- 图集作品（图片 + 音乐）不导出到媒体服务器目录。
+- 图集作品导出为按顺序编号的图片、背景音乐和 NFO；Jellyfin 没有图集类型，适合放进“照片”库。
 - 设计细节见 [docs/media-server-export.md](docs/media-server-export.md)。
 
 ## 配置
