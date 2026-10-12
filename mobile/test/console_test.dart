@@ -14,6 +14,7 @@ Map<String, dynamic> subJson({Map<String, dynamic>? runtime, Map<String, dynamic
     };
 
 void main() {
+  liveAndGalleryTests();
   group('subscriptions', () {
     test('parse a decorated subscription and its labels', () {
       final sub = Subscription.fromJson(subJson());
@@ -184,6 +185,41 @@ void main() {
       await tester.tap(find.text('解析并添加'));
       await tester.pump();
       expect(find.text('请先填写链接'), findsOneWidget);
+    });
+  });
+}
+
+void liveAndGalleryTests() {
+  group('live and gallery', () {
+    test('a live room reads its last detection and recording state', () {
+      final room = LiveRoom.fromJson({
+        'id': 'r', 'platform': 'bilibili', 'anchor_name': '主播', 'room_url': 'https://live.bilibili.com/1', 'monitor_enabled': true, 'auto_record': false,
+        'last_detection': {'is_live': true, 'checked_at': '2026-10-12T00:00:00+00:00'},
+        'runtime': {'recording': false, 'monitor_available': true, 'recording_available': true},
+      });
+      expect((room.name, room.isLive, room.stateText, room.autoRecord, room.recordingAvailable), ('主播', true, '直播中', false, true));
+      final recording = LiveRoom.fromJson({'id': 'r', 'room_url': 'u', 'runtime': {'recording': true}});
+      expect((recording.name, recording.stateText, recording.isLive), ('u', '录制中', null));
+      expect(LiveRoom.fromJson({'id': 'r', 'room_url': 'u', 'last_detection': {'is_live': false}}).stateText, '未开播');
+      expect(LiveRoom.fromJson({'id': 'r', 'room_url': 'u'}).stateText, '尚未检测');
+    });
+
+    test('recordings and the clock', () {
+      final record = LiveRecord.fromJson({'id': 'x', 'status': 'completed', 'start_time': '2026-10-12T01:02:03', 'duration': 3725.4, 'file_size': 1048576, 'error': ''});
+      expect((record.statusText, record.size), ('已完成', 1048576));
+      expect(formatClock(record.duration), '1:02:05');
+      expect(formatClock(75), '1:15');
+      expect(formatClock(5), '0:05');
+      expect(formatClock(0), '0:00');
+    });
+
+    test('a gallery keeps picture order and finds the music', () {
+      final gallery = Gallery.fromJson({'images': [{'id': 'a', 'name': '1.webp'}, {'id': 'b', 'name': '2.webp'}, {'name': 'no id'}], 'audio': {'id': 'm', 'name': 'bgm.mp3'}, 'index': 1});
+      expect(gallery.images, ['a', 'b']);
+      expect((gallery.audio, gallery.index), ('m', 1));
+      final bare = Gallery.fromJson({'images': [], 'audio': null});
+      expect(bare.images, isEmpty);
+      expect((bare.audio, bare.index), (null, 0));
     });
   });
 }

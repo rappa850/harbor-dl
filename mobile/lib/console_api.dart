@@ -138,4 +138,26 @@ extension ConsoleApi on Api {
         final data = _map(await dio.get('/api/logs', queryParameters: {'limit': limit, if (source.isNotEmpty) 'source': source}));
         return [for (final raw in data['items'] as List) LogEntry.fromJson(raw as Map<String, dynamic>)];
       }, fallback: '加载失败，请检查网络');
+
+  // ---- live ----
+
+  Future<List<LiveRoom>> liveRooms() => guarded(() async {
+        final data = _map(await dio.get('/api/live/subscriptions'));
+        return [for (final raw in data['items'] as List) LiveRoom.fromJson(raw as Map<String, dynamic>)];
+      }, fallback: '加载失败，请检查网络');
+
+  Future<void> checkLiveRoom(String id) => guarded(() => dio.post('/api/live/subscriptions/$id/check', options: Options(receiveTimeout: const Duration(minutes: 1))));
+  Future<void> startRecording(String id) => guarded(() => dio.post('/api/live/subscriptions/$id/record/start', options: Options(receiveTimeout: const Duration(minutes: 1))));
+  Future<void> stopRecording(String id) => guarded(() => dio.post('/api/live/subscriptions/$id/record/stop'));
+  Future<void> editLiveRoom(String id, Map<String, dynamic> changes) => guarded(() => dio.patch('/api/live/subscriptions/$id', data: changes));
+
+  Future<List<LiveRecord>> liveRecords(String id) => guarded(() async {
+        final data = _map(await dio.get('/api/live/subscriptions/$id/records'));
+        return [for (final raw in data['items'] as List) LiveRecord.fromJson(raw as Map<String, dynamic>)];
+      }, fallback: '加载失败，请检查网络');
+
+  // ---- gallery ----
+
+  Future<Gallery> gallery(String assetId) =>
+      guarded(() async => Gallery.fromJson(_map(await dio.get('/api/files/$assetId/gallery'))), fallback: '加载失败，请检查网络');
 }

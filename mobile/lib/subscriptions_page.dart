@@ -6,6 +6,7 @@ import 'add_subscription_page.dart';
 import 'api.dart';
 import 'console_api.dart';
 import 'console_models.dart';
+import 'live_page.dart';
 import 'subscription_page.dart';
 import 'widgets.dart';
 
@@ -89,9 +90,15 @@ class _SubscriptionsPageState extends State<SubscriptionsPage> {
       body: SafeArea(
         bottom: false,
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Text('订阅', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700))),
+          Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
+              child: Row(children: [
+                const Expanded(child: Text('订阅', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w700))),
+                TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => LivePage(api: widget.api, onLogout: widget.onLogout))),
+                    icon: const Icon(Icons.sensors, size: 18),
+                    label: const Text('直播')),
+              ])),
           if (items != null && items.any((s) => s.needsAttention))
             Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),

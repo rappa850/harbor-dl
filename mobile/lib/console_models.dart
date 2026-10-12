@@ -367,3 +367,75 @@ String relativeTime(String? iso, {bool future = false, DateTime? now}) {
   }
   return '刚刚';
 }
+
+// ---- live ---------------------------------------------------------------------------------------------------------
+
+class LiveRoom {
+  LiveRoom({
+    required this.id, required this.platform, required this.name, required this.roomUrl, required this.monitorEnabled, required this.autoRecord,
+    required this.recording, required this.monitorAvailable, required this.recordingAvailable, this.isLive, this.checkedAt, this.reason, this.error,
+  });
+
+  final String id, platform, name, roomUrl;
+  final bool monitorEnabled, autoRecord, recording, monitorAvailable, recordingAvailable;
+
+  /// Result of the last check: true / false, null = never checked.
+  final bool? isLive;
+  final String? checkedAt, reason, error;
+
+  String get stateText {
+    if (recording) return '录制中';
+    if (isLive == true) return '直播中';
+    if (isLive == false) return '未开播';
+    return '尚未检测';
+  }
+
+  factory LiveRoom.fromJson(Map<String, dynamic> j) {
+    final runtime = _obj(j['runtime']), last = j['last_detection'] is Map ? _obj(j['last_detection']) : null;
+    final anchor = _str(j['anchor_name']);
+    return LiveRoom(
+        id: j['id'] as String, platform: _str(j['platform']), name: anchor.isEmpty ? _str(j['room_url']) : anchor, roomUrl: _str(j['room_url']),
+        monitorEnabled: j['monitor_enabled'] != false, autoRecord: j['auto_record'] != false, recording: runtime['recording'] == true,
+        monitorAvailable: runtime['monitor_available'] == true, recordingAvailable: runtime['recording_available'] == true,
+        isLive: last == null ? null : last['is_live'] as bool?, checkedAt: last?['checked_at'] as String?, reason: runtime['reason'] as String?,
+        error: (runtime['recording_error'] ?? runtime['error']) as String?);
+  }
+}
+
+class LiveRecord {
+  LiveRecord(this.id, this.status, this.startTime, this.duration, this.size, this.error);
+
+  final String id, status, startTime, error;
+  final num duration;
+  final int size;
+
+  String get statusText => switch (status) { 'recording' => '录制中', 'completed' => '已完成', 'failed' => '失败', 'stopped' => '已停止', _ => status };
+
+  factory LiveRecord.fromJson(Map<String, dynamic> j) =>
+      LiveRecord(_str(j['id']), _str(j['status']), _str(j['start_time']), _num(j['duration']) ?? 0, _int(j['file_size']), _str(j['error']));
+}
+
+/// 3725 -> '1:02:05', 75 -> '1:15'.
+String formatClock(num seconds) {
+  final total = seconds.round();
+  if (total <= 0) return '0:00';
+  final h = total ~/ 3600, m = (total % 3600) ~/ 60, s = total % 60;
+  final tail = '${m.toString().padLeft(h > 0 ? 2 : 1, '0')}:${s.toString().padLeft(2, '0')}';
+  return h > 0 ? '$h:$tail' : tail;
+}
+
+// ---- gallery ------------------------------------------------------------------------------------------------------
+
+/// Pictures of a picture post in display order, and its background music if it has one. Ids are asset ids.
+class Gallery {
+  Gallery(this.images, this.audio, this.index);
+
+  final List<String> images;
+  final String? audio;
+  final int index;
+
+  factory Gallery.fromJson(Map<String, dynamic> j) => Gallery(
+      [for (final raw in (j['images'] as List? ?? const [])) if (raw is Map && raw['id'] is String) raw['id'] as String],
+      j['audio'] is Map ? (j['audio'] as Map)['id'] as String? : null,
+      _int(j['index']));
+}

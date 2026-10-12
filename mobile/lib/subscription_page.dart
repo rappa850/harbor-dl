@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'console_api.dart';
 import 'console_models.dart';
+import 'gallery_page.dart';
 import 'subscription_settings.dart';
 import 'widgets.dart';
 
@@ -280,6 +281,11 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
   Future<void> _tapWork(SubWork work) async {
     if (_selecting) {
       setState(() => _selected.contains(work.id) ? _selected.remove(work.id) : _selected.add(work.id));
+      return;
+    }
+    if (work.status == 'downloaded' && work.assetId != null && work.mediaKind == 'image') {
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => GalleryPage(api: _api, assetId: work.assetId!, title: work.title, onLogout: widget.onLogout)));
       return;
     }
     if (work.playable) {
