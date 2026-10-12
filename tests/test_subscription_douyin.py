@@ -170,12 +170,16 @@ class IdentityTests(DouyinCase):
 
     def test_unsupported_douyin_types_are_flagged_not_silently_fetched(self):
         self.client.post('/api/backup/subscriptions/import',json={'subscriptions':[
-            {'platform':'douyin','user_id':SEC,'subscription_type':'favorite'},{'platform':'douyin_collection','user_id':'7407257750834513958','subscription_type':'collection'}]})
+            {'platform':'douyin','user_id':SEC,'subscription_type':'playlist'},{'platform':'douyin','user_id':'7407257750834513958','subscription_type':'mix'},
+            {'platform':'douyin','user_id':'short','subscription_type':'like'}]})
         items=self.client.get('/api/subscriptions').json()['items']
-        favorite=next(i for i in items if i['subscription_type']=='favorite')
-        self.assertFalse(favorite['runtime']['manual_sync_available']);self.assertIn('尚未适配',favorite['runtime']['unavailable_reason'])
-        self.assertEqual(self.client.post('/api/subscriptions/'+favorite['id']+'/sync').status_code,422)
-        self.assertEqual(self.client.post('/api/subscriptions/'+favorite['id']+'/check').status_code,422)
+        self.assertEqual(len(items),3)
+        for item in items:
+            self.assertFalse(item['runtime']['manual_sync_available'],item['subscription_type'])
+            self.assertTrue(item['runtime']['unavailable_reason'])
+            self.assertEqual(self.client.post('/api/subscriptions/'+item['id']+'/sync').status_code,422)
+            self.assertEqual(self.client.post('/api/subscriptions/'+item['id']+'/check').status_code,422)
+        self.assertIn('尚未适配',next(i for i in items if i['subscription_type']=='playlist')['runtime']['unavailable_reason'])
 
 
 class CatalogTests(DouyinCase):

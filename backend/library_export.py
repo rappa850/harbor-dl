@@ -146,10 +146,13 @@ class LibraryExporter:
         work_id = (row['video_id'] if row else None) or (match[1] if match else task_id[:8])
         title, plot, tags = split_description(meta.get('description') or meta.get('title') or task['title'], work_id)
         stamp = meta.get('publish_time') or ''
+        owner = (meta.get('extra_data') or {}).get('author') or {}
+        own_list = sub.get('subscription_type', 'user') != 'user' and owner.get('name')   # likes / favorites / mixes: credit the real author
         return {
             'task': task, 'video': video, 'platform': platform, 'work_id': str(work_id), 'title': title, 'plot': plot, 'tags': tags,
-            'author': sub.get('nickname') or task['author'] or platform_label(platform), 'avatar_url': sub.get('avatar_url'),
-            'author_id': sub.get('user_id'), 'premiered': stamp[:10] if re.match(r'\d{4}-\d{2}-\d{2}', stamp) else '',
+            'author': (owner['name'] if own_list else sub.get('nickname')) or task['author'] or platform_label(platform),
+            'avatar_url': owner.get('avatar_url') if own_list else sub.get('avatar_url'),
+            'author_id': (owner.get('sec_uid') if own_list else sub.get('user_id')), 'premiered': stamp[:10] if re.match(r'\d{4}-\d{2}-\d{2}', stamp) else '',
             'duration': meta.get('duration'), 'cover_url': meta.get('cover_url'), 'source_url': task['url'],
             'gallery': gallery,
             'pictures': [self.manager.root / a['path'] for a in assets if a['kind'] == 'image'] if gallery else [],

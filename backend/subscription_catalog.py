@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime,timezone
 from .downloads import now
-from .subscription_downloads import video_state,queue_video,DownloadConflict
+from .subscription_downloads import video_state,queue_video,DownloadConflict,existing_download,link_download
 from .subscription_platforms import PlatformError
 
 FIRST_CHECK_PAGES=3     # first look at a new subscription (old UI: "首次添加默认仅检测前几页")
@@ -193,7 +193,8 @@ class SubscriptionCatalog:
             for entry in entries:
                 identity,metadata=entry_metadata(entry,config['platform'])
                 unique[identity]=metadata
-        added=len(self.persist(subscription_id,unique))
+        created,linked=self.persist(subscription_id,unique)
+        added=len(created)+len(linked)
         self.cache_covers(unique)
         return {'status':'completed','fetched':len(unique),'new_videos_count':added,
                 'video_count':self.list(subscription_id,1,1)['total']}
@@ -216,12 +217,15 @@ class SubscriptionCatalog:
         return self.registry.get(config['platform']).home_url
 
     def persist(self,subscription_id,unique):
-        """Insert/update works in one transaction; returns [(row id, video id)] for newly discovered ones."""
-        created=[];timestamp=now()
+        """Insert/update works in one transaction. Returns (created, linked): newly discovered works still to download as
+        [(row id, video id)], and those that share a download another subscription already made (not queued again)."""
+        created=[];linked=[];timestamp=now()
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            if not db.execute('SELECT id FROM subscriptions WHERE id=?',(subscription_id,)).fetchone():
+            owner=db.execute('SELECT config FROM subscriptions WHERE id=?',(subscription_id,)).fetchone()
+            if not owner:
                 raise LookupError('订阅已经删除，未保存此次同步')
+            platform=json.loads(owner['config']).get('platform')
             for identity,metadata in unique.items():
                 exists=db.execute('SELECT id FROM subscription_videos WHERE subscription_id=? AND video_id=?',(subscription_id,identity)).fetchone()
                 if exists:
@@ -231,8 +235,11 @@ class SubscriptionCatalog:
                     row_id=str(uuid.uuid4())
                     db.execute('INSERT INTO subscription_videos (id,subscription_id,video_id,metadata,created_at,updated_at) VALUES (?,?,?,?,?,?)',
                         (row_id,subscription_id,identity,json.dumps(metadata,ensure_ascii=False),timestamp,timestamp))
-                    created.append((row_id,identity))
-        return created
+                    shared=existing_download(db,self.manager.assets,platform,identity,subscription_id) if platform else None
+                    if shared is not None:
+                        link_download(db,row_id,shared);linked.append((row_id,identity))
+                    else:created.append((row_id,identity))
+        return created,linked
 
     def record_state(self,subscription_id,mode,error=None,new=0,queued=0,auth=False,more=False):
         stamp=now()
@@ -253,8 +260,11 @@ class SubscriptionCatalog:
 
     def mark_auth(self,subscription_id,expired):
         """Flag (or clear) 'sign in again' without touching the last check outcome; used by manual syncs."""
+        subscription_id=str(subscription_id)
         with self.store.connect() as db:
-            db.execute('UPDATE subscription_states SET auth_expired=? WHERE subscription_id=?',(int(expired),str(subscription_id)))
+            if not db.execute('SELECT id FROM subscriptions WHERE id=?',(subscription_id,)).fetchone():return
+            db.execute('INSERT INTO subscription_states(subscription_id,updated_at,auth_expired) VALUES (?,?,?) '
+                       'ON CONFLICT(subscription_id) DO UPDATE SET auth_expired=excluded.auth_expired',(subscription_id,now(),int(expired)))
 
     async def check(self,subscription_id,mode='check'):
         """Incremental look for new works; queues them when auto download is on. Failure keeps stored works."""
@@ -278,7 +288,7 @@ class SubscriptionCatalog:
                 extra={'progress':report} if self.accepts_progress(adapter) else {}
                 fetched=await adapter.fetch(config,self.network.for_url(self.adapter_url(config)),known=set(known),
                                             max_pages=FIRST_CHECK_PAGES if first else INCREMENTAL_PAGES,**extra)
-                created=self.persist(subscription_id,fetched.entries)
+                created,linked=self.persist(subscription_id,fetched.entries)
                 self.cache_covers(fetched.entries)
                 queued=0;problems=[]
                 if config['auto_download'] and config['status']=='active':
@@ -288,9 +298,9 @@ class SubscriptionCatalog:
                         except (DownloadConflict,LookupError,ValueError) as exc:problems.append(f'{video_id}: {exc}')
                         else:queued+=1
                 error=('部分新作品未能加入下载：'+'；'.join(problems[:3])) if problems else None
-                self.record_state(subscription_id,mode,error,len(created),queued,more=fetched.truncated)
+                self.record_state(subscription_id,mode,error,len(created)+len(linked),queued,more=fetched.truncated)
                 return {'status':'completed','first_check':first,'pages':fetched.pages,'fetched':len(fetched.entries),
-                        'new_videos_count':len(created),'queued_count':queued,'may_have_more':fetched.truncated,'skipped':fetched.skipped,
+                        'new_videos_count':len(created)+len(linked),'linked_count':len(linked),'queued_count':queued,'may_have_more':fetched.truncated,'skipped':fetched.skipped,
                         'errors':problems,'video_count':self.list(subscription_id,1,1)['total']}
             except LookupError:raise
             except (ValueError,PlatformError,TimeoutError) as exc:

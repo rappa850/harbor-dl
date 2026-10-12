@@ -10,7 +10,7 @@ SCOPES = ('read', 'download', 'manage')
 LEVEL = {name: index for index, name in enumerate(SCOPES)}
 DEFAULT_SCOPE = 'manage'          # tokens created before scopes existed, and tokens made from the web page
 
-PERSONAL = re.compile(r'^/api/(favorites/[^/]+|history|playback/record/[^/]+)$')
+PERSONAL = re.compile(r'^/api/(favorites/[^/]+|history|playback/record/[^/]+|auth/(avatar|background))$')
 DOWNLOAD = re.compile(r'^/api/(tasks|media/parse|tasks/[^/]+/(cancel|retry)|'
                       r'subscriptions/[^/]+/(check|sync|videos/download|videos/[^/]+/download))$')
 SENSITIVE_READ = re.compile(r'^/api/(backup/|network|logs|browser|settings)')

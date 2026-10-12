@@ -10,7 +10,7 @@ SUB='00000000-0000-4000-8000-000000000001'
 class RuleTests(unittest.TestCase):
     def test_required_levels(self):
         cases=[('GET','/api/feed','read'),('GET','/api/subscriptions','read'),('PUT','/api/favorites/abc','read'),
-               ('DELETE','/api/favorites/abc','read'),('POST','/api/history','read'),('PUT',f'/api/playback/record/{SUB}','read'),
+               ('DELETE','/api/favorites/abc','read'),('POST','/api/history','read'),('PUT','/api/auth/avatar','read'),('DELETE','/api/auth/background','read'),('PUT',f'/api/playback/record/{SUB}','read'),
                ('POST','/api/tasks','download'),('POST','/api/tasks/x/retry','download'),('POST','/api/tasks/x/cancel','download'),
                ('POST','/api/media/parse','download'),('POST',f'/api/subscriptions/{SUB}/check','download'),
                ('POST',f'/api/subscriptions/{SUB}/sync','download'),('POST',f'/api/subscriptions/{SUB}/videos/download','download'),

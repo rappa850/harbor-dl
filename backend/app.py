@@ -1024,6 +1024,15 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         except PlatformError as exc:
             raise HTTPException(502,str(exc)) from exc
 
+    @app.get('/api/douyin/collections')
+    async def douyin_collections(account=Depends(user)):
+        """Mixes (合集) the logged-in Douyin account has collected, for the add-subscription picker."""
+        adapter=registry.get('douyin')
+        try:return {'items':await adapter.my_mixes(network.for_url(adapter.home_url))}
+        except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+        except TimeoutError as exc:raise HTTPException(504,'抖音请求超时') from exc
+        except PlatformError as exc:raise HTTPException(502,str(exc)) from exc
+
     @app.get('/api/subscriptions/{subscription_id}')
     def subscription_detail(subscription_id: UUID,account=Depends(user)):
         result=subscriptions.get(subscription_id)

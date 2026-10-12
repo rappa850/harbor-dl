@@ -18,7 +18,7 @@ class SubscriptionConfig(BaseModel):
     nickname: str = Field(default='',max_length=256)
     storage_name: str = Field(default='',max_length=256)
     nickname_locked: bool = False
-    subscription_type: Literal['user','favorite','playlist','collection'] = 'user'
+    subscription_type: Literal['user','favorite','like','mix','playlist','collection'] = 'user'
     youtube_tab_type: Literal['videos','shorts'] | None = None
     collection_id: str | None = None
     collection_title: str | None = None

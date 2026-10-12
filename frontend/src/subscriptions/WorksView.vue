@@ -117,7 +117,7 @@ async function runCleanup(){
           </div>
           <div class="work-body">
             <h4 :title="v.title">{{v.title}}</h4>
-            <p class="meta">{{dateText(v.publish_time)}}<template v-if="v.status==='downloading'&&v.task_speed"> · {{v.task_speed}}</template></p>
+            <p class="meta"><template v-if="v.extra_data?.author?.name&&item.subscription_type!=='user'">{{v.extra_data.author.name}} · </template>{{dateText(v.publish_time)}}<template v-if="v.status==='downloading'&&v.task_speed"> · {{v.task_speed}}</template></p>
             <p v-if="v.error_message&&v.status!=='downloaded'" class="work-error" :title="v.error_message">{{v.error_message}}</p>
             <div class="work-actions" @click.stop>
               <button v-if="primary(v)==='play'" class="btn small primary" @click="emit('play',{subscriptionId:item.id,videoId:v.id})"><Icon name="play" :size="13"/> 播放</button>

@@ -30,6 +30,10 @@ SEC_UID = re.compile(r'^[A-Za-z0-9_\-]{12,}$')
 PAGE_SIZE = 18
 RETRIES = 3
 MAX_PAGES = 1000
+MAX_MIX_PAGES = 20
+MIX_ID = re.compile(r'^\d{10,}$')
+PERSONAL_TYPES = ('like', 'favorite')   # lists that belong to the logged-in account itself
+PERSONAL_DELAY = 2.0                    # extra spacing factor between pages: these lists are watched more closely
 LOGIN_CODES = (8, 2154)   # status codes the web client answers when the session is missing or expired
 RISK_HINT = '抖音没有返回数据，可能触发风控或 Cookie 无效；请在设置中更新抖音 Cookie 后重试'
 
@@ -72,6 +76,26 @@ def parse_sec_uid(url):
     raise ValueError('请使用抖音博主主页链接（形如 https://www.douyin.com/user/…），单个作品链接不能作为博主订阅')
 
 
+def parse_mix_id(url):
+    """Mix id from a collection URL or a bare number, else None."""
+    text = str(url).strip()
+    if MIX_ID.fullmatch(text):return text
+    parsed = urlsplit(text)
+    if not _host_ok(parsed.hostname or ''):return None
+    match = re.search(r'/(?:collection|mix/detail|share/mix/detail|share/mix)/(\d{10,})', parsed.path)
+    return match[1] if match else None
+
+
+def profile_fields(user, counts=True):
+    """Profile details shared by every Douyin subscription built from a user record."""
+    avatar = (user.get('avatar_larger') or user.get('avatar_thumb') or {}).get('url_list') or []
+    def count(key):
+        value = user.get(key) if counts else None
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    return dict(signature=user.get('signature') or None, avatar_url=avatar[0] if avatar else None,
+                follower_count=count('follower_count'), like_count=count('total_favorited'), video_count=count('aweme_count'))
+
+
 def entry_from_aweme(item):
     """(video_id, metadata) from one aweme_list item, or None when it has no usable identity."""
     if not isinstance(item, dict):return None
@@ -92,12 +116,16 @@ def entry_from_aweme(item):
         urls = (video.get(key) or {}).get('url_list') if isinstance(video.get(key), dict) else None
         if urls:cover = urls[0];break
     title = (item.get('desc') or '').strip() or video_id
+    owner = item.get('author') if isinstance(item.get('author'), dict) else {}
+    avatar = first_url(owner.get('avatar_thumb') or owner.get('avatar_larger'))
+    author = {'name': owner.get('nickname') or None, 'sec_uid': owner.get('sec_uid') or None, 'avatar_url': avatar} \
+        if owner.get('nickname') or owner.get('sec_uid') else None
     return video_id, {
         'title': title, 'description': item.get('desc') or None,
         'url': f'{WEB}/{"note" if is_image else "video"}/{video_id}', 'cover_url': cover,
         'duration': duration, 'publish_time': published,
         'extra_data': {'media_type': 'image' if is_image else 'video', 'aweme_type': item.get('aweme_type'),
-                       'is_top': bool(item.get('is_top'))}}
+                       'is_top': bool(item.get('is_top')), 'author': author}}
 
 
 def is_audio_url(url):
@@ -169,9 +197,13 @@ class DouyinAdapter(SubscriptionAdapter):
         self.detail_fetcher = detail_fetcher or browser_detail
 
     def describe_unavailable(self, config):
-        if config.get('subscription_type', 'user') != 'user':
-            return '抖音收藏、点赞和合集订阅尚未适配'
-        if not SEC_UID.fullmatch(str(config.get('user_id') or '')):return '缺少已解析的抖音博主标识'
+        kind = config.get('subscription_type', 'user')
+        if kind == 'mix':
+            if not MIX_ID.fullmatch(str(config.get('collection_id') or '')):return '缺少已解析的抖音合集标识'
+            return None
+        if kind not in ('user', *PERSONAL_TYPES):return '此抖音订阅类型尚未适配'
+        if not SEC_UID.fullmatch(str(config.get('user_id') or '')):
+            return '缺少已解析的抖音账号标识' if kind in PERSONAL_TYPES else '缺少已解析的抖音博主标识'
         return None
 
     def client(self, network):
@@ -197,7 +229,7 @@ class DouyinAdapter(SubscriptionAdapter):
         query = urlencode(base, quote_via=quote)
         return f'{WEB}{path}?{query}&a_bogus={ab_sign(query, UA)}'
 
-    async def api(self, client, network, path, params, referer):
+    async def api(self, client, network, path, params, referer, data=None):
         cookie = cookie_header(network.get('cookie_content', ''))
         headers = {'user-agent': UA, 'referer': referer, 'accept': 'application/json, text/plain, */*',
                    'accept-language': 'zh-CN,zh;q=0.9'}
@@ -207,7 +239,11 @@ class DouyinAdapter(SubscriptionAdapter):
         failure, auth_hint = None, False
         for attempt in range(RETRIES):
             if attempt:await self.sleep(random.uniform(1.5, 3.5) * attempt)
-            try:response = await client.get(self.signed_url(path, params, cookie), headers=headers)
+            url = self.signed_url(path, params, cookie)
+            try:
+                if data is None:response = await client.get(url, headers=headers)
+                else:response = await client.post(url, headers={**headers, 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                                                  content=urlencode(data))
             except httpx.HTTPError as exc:raise PlatformError(f'抖音请求失败：{exc.__class__.__name__}') from exc
             if response.status_code >= 400:
                 if 'Uifid Not Found' in response.text:
@@ -239,6 +275,8 @@ class DouyinAdapter(SubscriptionAdapter):
         return found
 
     async def resolve(self, payload, network):
+        if payload.source in PERSONAL_TYPES:return await self.resolve_personal(payload, network)
+        if payload.source == 'mix':return await self.resolve_mix(payload, network)
         async with self.client(network) as client:
             sec_uid = await self.sec_uid_for(client, payload.profile_url)
             data = await self.api(client, network, '/aweme/v1/web/user/profile/other/',
@@ -247,29 +285,117 @@ class DouyinAdapter(SubscriptionAdapter):
         user = data.get('user')
         if not isinstance(user, dict) or not user:raise PlatformError('抖音没有返回博主资料，Cookie 可能无效或博主不存在')
         if user.get('sec_uid') and user['sec_uid'] != sec_uid:raise ValueError('平台返回的博主身份与链接不一致')
-        avatar = (user.get('avatar_larger') or user.get('avatar_thumb') or {}).get('url_list') or []
-        def count(key):
-            value = user.get(key)
-            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
         return SubscriptionConfig(
             platform='douyin', user_id=sec_uid, profile_url=f'{WEB}/user/{sec_uid}',
             nickname=payload.nickname.strip() or user.get('nickname') or sec_uid,
             nickname_locked=bool(payload.nickname.strip()), subscription_type='user',
-            update_interval=payload.update_interval, auto_download=payload.auto_download,
-            signature=user.get('signature') or None, avatar_url=avatar[0] if avatar else None,
-            follower_count=count('follower_count'), like_count=count('total_favorited'), video_count=count('aweme_count'))
+            update_interval=payload.update_interval, auto_download=payload.wants_auto_download, **profile_fields(user))
+
+    async def resolve_personal(self, payload, network):
+        """My likes / my favorites: both belong to the account the saved Cookie is logged in to."""
+        if not cookie_header(network.get('cookie_content', '')):
+            raise ValueError('点赞和收藏属于登录账号，请先登录抖音')
+        async with self.client(network) as client:
+            data = await self.api(client, network, '/aweme/v1/web/user/profile/self/',
+                                  {'source': 'channel_pc_web', 'publish_video_strategy_type': '2'}, f'{WEB}/user/self')
+        user = data.get('user')
+        sec_uid = user.get('sec_uid') if isinstance(user, dict) else None
+        if not sec_uid or not SEC_UID.fullmatch(str(sec_uid)):
+            raise PlatformError('抖音没有返回当前登录账号的资料，登录状态可能已失效，请重新登录', auth=True)
+        label = '点赞' if payload.source == 'like' else '收藏'
+        name = user.get('nickname') or sec_uid
+        return SubscriptionConfig(
+            platform='douyin', user_id=sec_uid, profile_url=f'{WEB}/user/self?showTab={"like" if payload.source == "like" else "favorite_collection"}',
+            nickname=payload.nickname.strip() or f'{name} 的{label}', nickname_locked=bool(payload.nickname.strip()),
+            subscription_type=payload.source, update_interval=payload.update_interval, auto_download=payload.wants_auto_download,
+            **profile_fields(user, counts=False))
+
+    async def mix_id_for(self, client, text):
+        found = parse_mix_id(text)
+        if found:return found
+        url = share_url(text)
+        found = parse_mix_id(url)
+        if found:return found
+        if not (urlsplit(url).hostname or '').startswith('v.'):raise ValueError('请输入抖音合集链接（形如 https://www.douyin.com/collection/…）或合集 ID')
+        try:response = await client.get(url, headers={'user-agent': MOBILE_UA})
+        except httpx.HTTPError as exc:raise PlatformError(f'短链接解析失败：{exc.__class__.__name__}') from exc
+        found = parse_mix_id(str(response.url))
+        if not found:raise ValueError('短链接没有指向抖音合集')
+        return found
+
+    async def resolve_mix(self, payload, network):
+        async with self.client(network) as client:
+            mix_id = await self.mix_id_for(client, payload.profile_url)
+            data = await self.api(client, network, '/aweme/v1/web/mix/detail/', {'mix_id': mix_id}, f'{WEB}/collection/{mix_id}')
+        info = data.get('mix_info')
+        if not isinstance(info, dict) or not info:raise PlatformError('抖音没有返回合集资料，Cookie 可能无效或合集不存在')
+        if info.get('mix_id') and str(info['mix_id']) != mix_id:raise ValueError('平台返回的合集身份与链接不一致')
+        title = (info.get('mix_name') or '').strip() or mix_id
+        owner = info.get('author') if isinstance(info.get('author'), dict) else {}
+        stats = info.get('statis') if isinstance(info.get('statis'), dict) else {}
+        total = stats.get('updated_to_episode')
+        return SubscriptionConfig(
+            platform='douyin', user_id=mix_id, profile_url=f'{WEB}/collection/{mix_id}', nickname=payload.nickname.strip() or title,
+            nickname_locked=bool(payload.nickname.strip()), subscription_type='mix', collection_id=mix_id, collection_title=title,
+            author_id=owner.get('sec_uid') or None, author_name=owner.get('nickname') or None,
+            update_interval=payload.update_interval, auto_download=payload.wants_auto_download,
+            signature=(info.get('desc') or '').strip() or None, avatar_url=first_url(info.get('cover_url')),
+            video_count=total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else None)
+
+    async def my_mixes(self, network):
+        """Mixes the logged-in account has collected, for the 'add a mix' picker."""
+        if not cookie_header(network.get('cookie_content', '')):
+            raise ValueError('收藏的合集属于登录账号，请先登录抖音')
+        result, cursor = [], 0
+        async with self.client(network) as client:
+            for page in range(MAX_MIX_PAGES):
+                if page:await self.sleep(random.uniform(*self.page_delay))
+                data = await self.api(client, network, '/aweme/v1/web/mix/listcollection/', {}, f'{WEB}/user/self?showTab=favorite_collection',
+                                      data={'count': 12, 'cursor': cursor})
+                infos = data.get('mix_infos')
+                if not isinstance(infos, list):infos = []
+                for info in infos:
+                    mix_id = str(info.get('mix_id') or '') if isinstance(info, dict) else ''
+                    if not MIX_ID.fullmatch(mix_id):continue
+                    owner = info.get('author') if isinstance(info.get('author'), dict) else {}
+                    result.append({'mix_id': mix_id, 'title': (info.get('mix_name') or mix_id).strip(), 'author': owner.get('nickname'),
+                                   'cover_url': first_url(info.get('cover_url')),
+                                   'count': (info.get('statis') or {}).get('updated_to_episode')})
+                nxt = data.get('cursor')
+                if not data.get('has_more') or not isinstance(nxt, int) or nxt == cursor:break
+                cursor = nxt
+        return result
+
+    def page_request(self, config, cursor):
+        """(path, query params, form body or None, referer, cursor key in the answer) for one page of the subscription's list."""
+        kind = config.get('subscription_type', 'user')
+        if kind == 'like':
+            return ('/aweme/v1/web/aweme/favorite/', {'sec_user_id': config['user_id'], 'max_cursor': cursor, 'min_cursor': 0,
+                    'count': PAGE_SIZE, 'whale_cut_token': '', 'cut_version': '1', 'publish_video_strategy_type': '2'},
+                    None, f'{WEB}/user/self?showTab=like', 'max_cursor')
+        if kind == 'favorite':
+            return ('/aweme/v1/web/aweme/listcollection/', {}, {'count': 10, 'cursor': cursor},
+                    f'{WEB}/user/self?showTab=favorite_collection', 'cursor')
+        if kind == 'mix':
+            return ('/aweme/v1/web/mix/aweme/', {'mix_id': config['collection_id'], 'cursor': cursor, 'count': 20},
+                    None, f'{WEB}/collection/{config["collection_id"]}', 'cursor')
+        sec_uid = config['user_id']
+        return ('/aweme/v1/web/aweme/post/', {'sec_user_id': sec_uid, 'max_cursor': cursor, 'count': PAGE_SIZE, 'locate_query': 'false',
+                'show_live_replay_strategy': '1', 'need_time_list': '1', 'time_list_query': '0',
+                'whale_cut_token': '', 'cut_version': '1', 'publish_video_strategy_type': '2'},
+                None, f'{WEB}/user/{sec_uid}', 'max_cursor')
 
     async def fetch(self, config, network, known=None, max_pages=None, progress=None):
-        sec_uid = config['user_id']
+        kind = config.get('subscription_type', 'user')
+        if kind != 'user' and not cookie_header(network.get('cookie_content', '')):
+            raise PlatformError('这个抖音订阅需要登录状态，请先登录抖音', auth=True)
         result, cursor, limit = FetchResult(), 0, min(max_pages or MAX_PAGES, MAX_PAGES)
+        spacing = PERSONAL_DELAY if kind in PERSONAL_TYPES else 1.0
         async with self.client(network) as client:
             while result.pages < limit:
-                if result.pages:await self.sleep(random.uniform(*self.page_delay))
-                data = await self.api(client, network, '/aweme/v1/web/aweme/post/',
-                    {'sec_user_id': sec_uid, 'max_cursor': cursor, 'count': PAGE_SIZE, 'locate_query': 'false',
-                     'show_live_replay_strategy': '1', 'need_time_list': '1', 'time_list_query': '0',
-                     'whale_cut_token': '', 'cut_version': '1', 'publish_video_strategy_type': '2'},
-                    f'{WEB}/user/{sec_uid}')
+                if result.pages:await self.sleep(random.uniform(*self.page_delay) * spacing)
+                path, params, form, referer, cursor_key = self.page_request(config, cursor)
+                data = await self.api(client, network, path, params, referer, data=form)
                 items = data.get('aweme_list')
                 if items is None and data.get('has_more') in (0, False, None):items = []
                 if not isinstance(items, list):raise PlatformError('抖音作品列表格式无法识别')
@@ -283,7 +409,7 @@ class DouyinAdapter(SubscriptionAdapter):
                     if known is not None and entry[0] not in known and not entry[1]['extra_data']['is_top']:fresh = True
                 if progress:progress(result.pages, len(result.entries))
                 more = bool(data.get('has_more'))
-                next_cursor = data.get('max_cursor')
+                next_cursor = data.get(cursor_key)
                 if not more:result.complete = True;break
                 if not isinstance(next_cursor, int) or next_cursor == cursor or not items:
                     raise PlatformError('抖音分页游标异常，未保存此次读取')

@@ -147,3 +147,4 @@
 .sync-bar.indeterminate>i{width:35%;animation:sub-slide 1.4s ease-in-out infinite}.sync-bar.queued>i{width:0}
 @keyframes sub-slide{0%{margin-left:-35%}100%{margin-left:100%}}
 @media (prefers-reduced-motion:reduce){.sync-bar.indeterminate>i,.spin,.work.skeleton .cover,.work.skeleton .line,.sub-skeleton div{animation:none}}
+.mix-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--sp-8);max-height:200px;overflow:auto}.mix-list .btn{width:100%;justify-content:flex-start;text-align:left}

@@ -35,7 +35,10 @@ class SubscriptionNfo:
             raise NfoConflict('仅已下载且有任务关联的作品支持编辑 NFO')
         if row['download_task_id'] in self.manager.running:raise NfoConflict('下载器尚未结束，请稍后编辑 NFO')
         if row['task_status'] is not None and row['task_subscription_id']!=subscription_id:
-            raise ValueError('任务不属于此订阅，无法编辑 NFO')
+            # A work shared with another subscription (my likes, an author, a mix) was downloaded through that one.
+            shared=db.execute('SELECT 1 FROM subscription_videos WHERE subscription_id=? AND video_id=? AND download_task_id=?',
+                              (row['task_subscription_id'],row['video_id'],row['download_task_id'])).fetchone()
+            if not shared:raise ValueError('任务不属于此订阅，无法编辑 NFO')
         media=self.manager.assets.path(row['task_file_path'] or row['download_file_path'])
         directory=self.manager.root/row['download_task_id']
         if is_link(directory):raise ValueError('任务目录为链接，无法编辑 NFO')
