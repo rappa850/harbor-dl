@@ -37,6 +37,7 @@ from .login_limit import LoginLimit
 from .probe import Probe
 from .bloggers import Bloggers
 from .library_covers import run_ffmpeg
+from . import token_scopes
 from .api_tokens import ApiTokens
 from .subscriptions import Subscriptions, SubscriptionEdit, SubscriptionImport
 from .subscription_profiles import ProfileInput, ProfileResolver
@@ -91,6 +92,7 @@ class HistoryInput(BaseModel):
 
 class AppLoginInput(Credentials):
     device: str = Field(default='Harbor App', max_length=128)
+    scope: Literal['read', 'download', 'manage'] = 'download'   # what 0.7 apps need; the console app asks for 'manage'
 
 
 class ProfileUpdate(BaseModel):
@@ -169,6 +171,7 @@ class SettingsInput(BaseModel):
 class TokenCreate(BaseModel):
     name: str = Field(min_length=1,max_length=128)
     expires_in_days: int | None = Field(default=None,ge=1)
+    scope: Literal['read', 'download', 'manage'] = 'manage'
 
     @field_validator('name')
     @classmethod
@@ -181,6 +184,7 @@ class TokenUpdate(BaseModel):
     name: str | None = Field(default=None,min_length=1,max_length=128)
     expires_at: AwareDatetime | None = None
     is_active: bool | None = None
+    scope: Literal['read', 'download', 'manage'] | None = None
 
     @model_validator(mode='after')
     def validate_fields(self):
@@ -189,6 +193,8 @@ class TokenUpdate(BaseModel):
             self.name=self.name.strip()
         if 'is_active' in self.model_fields_set and self.is_active is None:
             raise ValueError('启用状态不能为 null')
+        if 'scope' in self.model_fields_set and self.scope is None:
+            raise ValueError('权限范围不能为 null')
         return self
 
 
@@ -287,6 +293,8 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
         if token is not None:
             account=api_tokens.authenticate(token)
             if not account:raise HTTPException(401,'API Token 无效、已停用或已过期')
+            if not token_scopes.allows(account['scope'],request.method,request.url.path):
+                raise HTTPException(403,f"此 Token 的权限范围（{account['scope']}）不足，该操作需要 {token_scopes.required(request.method,request.url.path)}")
             return account
         return session_user(request)
 
@@ -343,12 +351,12 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
     def app_login(payload: AppLoginInput, request: Request):
         """Sign in from a native app: returns a revocable API token (shown once) instead of a cookie."""
         account = checked_account(payload, request)
-        issued = api_tokens.create(account['id'], payload.device[:64] or 'Harbor App', 365)
-        return {'token': issued['token'], 'token_id': issued['id'], 'username': account['username']}
+        issued = api_tokens.create(account['id'], payload.device[:64] or 'Harbor App', 365, payload.scope)
+        return {'token': issued['token'], 'token_id': issued['id'], 'username': account['username'], 'scope': issued['scope']}
 
     @app.get('/api/auth/me')
     def me(account=Depends(user)):
-        return {**account, 'avatar': avatar_version(account['id'])}
+        return {'scope': 'manage', **account, 'avatar': avatar_version(account['id'])}
 
     @app.post('/api/auth/logout')
     def logout(request: Request, response: Response, account=Depends(session_user)):
@@ -493,7 +501,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
 
     @app.post('/api/auth/tokens',status_code=201)
     def create_token(payload: TokenCreate,account=Depends(session_user)):
-        try:return api_tokens.create(account['id'],payload.name,payload.expires_in_days)
+        try:return api_tokens.create(account['id'],payload.name,payload.expires_in_days,payload.scope)
         except ValueError as exc:raise HTTPException(422,str(exc)) from exc
 
     @app.patch('/api/auth/tokens/{token_id}')

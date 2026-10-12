@@ -96,6 +96,9 @@ class Store:
                     db.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             video_columns={row['name'] for row in db.execute('PRAGMA table_info(subscription_videos)')}
             state_columns={row['name'] for row in db.execute('PRAGMA table_info(subscription_states)')}
+            token_columns={row['name'] for row in db.execute('PRAGMA table_info(api_tokens)')}
+            if 'scope' not in token_columns:
+                db.execute("ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'manage'")
             if 'more_available' not in state_columns:
                 db.execute('ALTER TABLE subscription_states ADD COLUMN more_available INTEGER NOT NULL DEFAULT 0')
             if 'auth_expired' not in state_columns:

@@ -5,6 +5,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from .token_scopes import DEFAULT_SCOPE, SCOPES
+
 
 def timestamp(value):
     return datetime.fromtimestamp(value, timezone.utc).isoformat() if value is not None else None
@@ -17,12 +19,14 @@ class ApiTokens:
     def view(self, row):
         return {key: timestamp(row[key]) if key in ('created_at','expires_at','last_used_at') else
                 bool(row[key]) if key=='is_active' else row[key]
-                for key in ('id','name','token_suffix','created_at','expires_at','last_used_at','is_active')}
+                for key in ('id','name','token_suffix','scope','created_at','expires_at','last_used_at','is_active')}
 
     def list(self, user_id):
         return [self.view(row) for row in self.store.all('SELECT * FROM api_tokens WHERE user_id=? ORDER BY created_at DESC,id', (user_id,))]
 
-    def create(self, user_id, name, days):
+    def create(self, user_id, name, days, scope=DEFAULT_SCOPE):
+        if scope not in SCOPES:
+            raise ValueError('权限范围无效')
         token = 'harbor_' + secrets.token_urlsafe(40)
         token_id = str(uuid.uuid4())
         created = time.time()
@@ -32,8 +36,9 @@ class ApiTokens:
         except (ValueError, OverflowError, OSError) as exc:
             raise ValueError('过期时间超出可用范围') from exc
         with self.store.connect() as db:
-            db.execute('INSERT INTO api_tokens VALUES (?,?,?,?,?,?,?,?,?)',
-                       (token_id, user_id, name, hashlib.sha256(token.encode()).hexdigest(), token[-8:], created, expiry, None, 1))
+            db.execute('INSERT INTO api_tokens(id,user_id,name,token_hash,token_suffix,created_at,expires_at,last_used_at,is_active,scope) '
+                       'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                       (token_id, user_id, name, hashlib.sha256(token.encode()).hexdigest(), token[-8:], created, expiry, None, 1, scope))
         return {**self.get(token_id,user_id), 'token':token}
 
     def get(self, token_id, user_id):
@@ -44,6 +49,9 @@ class ApiTokens:
         values = {}
         if 'name' in fields: values['name']=fields['name']
         if 'is_active' in fields: values['is_active']=int(fields['is_active'])
+        if 'scope' in fields:
+            if fields['scope'] not in SCOPES:raise ValueError('权限范围无效')
+            values['scope']=fields['scope']
         if 'expires_at' in fields: values['expires_at']=fields['expires_at'].timestamp() if fields['expires_at'] else None
         if values:
             with self.store.connect() as db:
@@ -65,9 +73,9 @@ class ApiTokens:
     def authenticate(self, token):
         with self.store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            account=db.execute('SELECT u.id,u.username,t.id AS token_id FROM api_tokens t JOIN users u ON u.id=t.user_id '
+            account=db.execute('SELECT u.id,u.username,t.id AS token_id,t.scope FROM api_tokens t JOIN users u ON u.id=t.user_id '
                 'WHERE t.token_hash=? AND t.is_active=1 AND (t.expires_at IS NULL OR t.expires_at>?)',
                 (hashlib.sha256(token.encode()).hexdigest(),time.time())).fetchone()
             if not account:return None
             db.execute('UPDATE api_tokens SET last_used_at=? WHERE id=?',(time.time(),account['token_id']))
-            return {'id':account['id'],'username':account['username']}
+            return {'id':account['id'],'username':account['username'],'scope':account['scope']}

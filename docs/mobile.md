@@ -40,7 +40,7 @@
 
 ### 安全与部署
 - 目前只面向局域网：明文 HTTP 全放行（`usesCleartextTraffic`）。上公网需要 HTTPS 反代，并收紧为只对内网放行。
-- API Token 没有权限范围，持有即全权限。
+- API Token 有三档权限范围（`read` 浏览播放与个人状态、`download` 另可创建下载与检查 / 同步订阅、`manage` 全部），规则见 `backend/token_scopes.py`。`app-login` 默认签发 `download`，可用 `scope` 字段申请其他档位；升级前已有的 Token 视为 `manage`。浏览器会话不受限制。
 - 博主按作者名区分，不同平台的同名博主会合并。
 
 ## 构建与安装
