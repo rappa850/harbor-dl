@@ -943,7 +943,7 @@ def create_app(data_dir=None, frontend_dir=None, command_builder=None, inspector
 
     @app.post('/api/subscriptions/{subscription_id}/videos/download')
     async def download_subscription_videos(subscription_id: UUID,payload: BatchDownloadInput,account=Depends(user)):
-        try:result=queue_many(store,manager,subscription_id,payload.video_ids)
+        try:result=queue_many(store,manager,subscription_id,payload.video_ids,payload.limit)
         except LookupError as exc:raise HTTPException(404,str(exc)) from exc
         manager.wake.set()
         return result

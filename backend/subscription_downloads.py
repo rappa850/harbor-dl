@@ -15,6 +15,7 @@ class SubscriptionDownloadInput(BaseModel):
 
 class BatchDownloadInput(BaseModel):
     video_ids: list[str] | None = Field(default=None,max_length=2000)   # explicit works; None = every work still to do
+    limit: int | None = Field(default=None,ge=1,le=1000)   # with no video_ids: only the newest N works still to do
 
 
 def format_for_quality(quality):
@@ -76,17 +77,21 @@ def file_author(config,metadata):
 PENDING_STATUSES=('not_downloaded','failed','cancelled','orphaned')
 
 
-def queue_many(store,manager,subscription_id,video_ids=None):
+def queue_many(store,manager,subscription_id,video_ids=None,limit=None):
     """Queue several works; each one succeeds or is reported on its own. Without ids: all works still to do."""
     subscription_id=str(subscription_id)
     with store.connect() as db:
         if not db.execute('SELECT id FROM subscriptions WHERE id=?',(subscription_id,)).fetchone():raise LookupError('订阅不存在')
-        rows=db.execute('SELECT v.id,v.video_id,v.downloaded,v.download_file_path,v.error_message,t.status AS task_status,'
+        rows=db.execute('SELECT v.id,v.video_id,v.metadata,v.downloaded,v.download_file_path,v.error_message,t.status AS task_status,'
                         't.file_path AS task_file_path,t.error AS task_error FROM subscription_videos v '
                         'LEFT JOIN tasks t ON t.id=v.download_task_id WHERE v.subscription_id=? ORDER BY v.created_at,v.id',
                         (subscription_id,)).fetchall()
     chosen=None if video_ids is None else set(video_ids)
     result={'requested':0,'queued':0,'linked':0,'skipped':0,'errors':[]}
+    if chosen is None and limit:
+        pending=[row for row in rows if video_state(row,manager.assets)['status'] in PENDING_STATUSES]
+        pending.sort(key=lambda row:json.loads(row['metadata']).get('publish_time') or '',reverse=True)
+        rows=pending[:limit]
     for row in rows:
         if chosen is not None and row['id'] not in chosen:continue
         if chosen is None and video_state(row,manager.assets)['status'] not in PENDING_STATUSES:continue

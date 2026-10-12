@@ -3,10 +3,13 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'blogger_page.dart';
 import 'bloggers_page.dart';
+import 'downloads_page.dart';
 import 'home_page.dart';
 import 'me_page.dart';
+import 'subscriptions_page.dart';
+import 'widgets.dart';
 
-/// Bottom navigation over the three main tabs. A tab is built on first visit and then kept, so the feed keeps its
+/// Bottom navigation over the five main tabs (feed, bloggers, subscriptions, downloads, me). A tab is built on first visit and then kept, so the feed keeps its
 /// place; the feed is told when it is covered so it stops playing.
 class Shell extends StatefulWidget {
   const Shell({super.key, required this.api, required this.onLogout});
@@ -31,7 +34,14 @@ class _ShellState extends State<Shell> {
           onLogout: widget.onLogout,
           onAuthor: (author) => openBlogger(context, widget.api, widget.onLogout, author)),
       () => BloggersPage(api: widget.api, onLogout: widget.onLogout),
-      () => MePage(api: widget.api, onLogout: widget.onLogout, active: _tab == 2),
+      () => SubscriptionsPage(
+          api: widget.api,
+          onLogout: widget.onLogout,
+          active: _tab == 2,
+          onPlay: (item) => openFeed(context,
+              api: widget.api, onLogout: widget.onLogout, seed: FeedSeed([item], null, 0), mode: 'latest', author: '')),
+      () => DownloadsPage(api: widget.api, onLogout: widget.onLogout, active: _tab == 3),
+      () => MePage(api: widget.api, onLogout: widget.onLogout, active: _tab == 4),
     ];
     return Scaffold(
       backgroundColor: Colors.black,
@@ -48,6 +58,8 @@ class _ShellState extends State<Shell> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.play_circle_outline), selectedIcon: Icon(Icons.play_circle), label: '首页'),
           NavigationDestination(icon: Icon(Icons.people_outline), selectedIcon: Icon(Icons.people), label: '博主'),
+          NavigationDestination(icon: Icon(Icons.rss_feed_outlined), selectedIcon: Icon(Icons.rss_feed), label: '订阅'),
+          NavigationDestination(icon: Icon(Icons.download_outlined), selectedIcon: Icon(Icons.download), label: '下载'),
           NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: '我的'),
         ],
       ),

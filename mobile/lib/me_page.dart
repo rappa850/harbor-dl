@@ -6,6 +6,7 @@ import 'api.dart';
 import 'offline.dart';
 import 'offline_tab.dart';
 import 'settings.dart';
+import 'system_page.dart';
 import 'video_cache.dart';
 import 'video_grid.dart';
 import 'widgets.dart';
@@ -159,6 +160,14 @@ class _MePageState extends State<MePage> with SingleTickerProviderStateMixin {
                 onTap: () {
                   cache.clear();
                   setSheet(() {});
+                }),
+            ListTile(
+                leading: const Icon(Icons.monitor_heart_outlined),
+                title: const Text('服务器状态与日志'),
+                subtitle: const Text('磁盘、并发、平台登录状态、最近的失败'),
+                onTap: () {
+                  Navigator.pop(sheet);
+                  Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SystemPage(api: _api, onLogout: widget.onLogout)));
                 }),
             ListTile(
                 leading: const Icon(Icons.logout),

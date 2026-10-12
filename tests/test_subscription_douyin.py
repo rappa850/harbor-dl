@@ -285,6 +285,17 @@ class CheckTests(DouyinCase):
         self.assertEqual(self.client.post(base+'/sync').status_code,502)
         self.assertTrue(self.client.get(base).json()['runtime']['auth_expired'])
 
+    def test_batch_download_limit_takes_the_newest_pending_works(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(n) for n in range(1,6)]]);self.client.post(base+'/sync')    # aweme(1) is the newest
+        result=self.client.post(base+'/videos/download',json={'limit':2}).json()
+        self.assertEqual((result['requested'],result['queued']),(2,2))
+        titles={w['title']:w['status'] for w in self.client.get(base+'/videos?page_size=100').json()['videos']}
+        self.assertEqual(titles['作品 1'],'downloading');self.assertEqual(titles['作品 2'],'downloading');self.assertEqual(titles['作品 3'],'not_downloaded')
+        self.assertEqual(self.client.post(base+'/videos/download',json={'limit':0}).status_code,422)
+        rest=self.client.post(base+'/videos/download',json={'limit':50}).json()
+        self.assertEqual(rest['queued'],3)
+
     def test_busy_missing_and_unsupported(self):
         item,base=self.make(False)
         self.app.state.catalog.active.add(item['id'])

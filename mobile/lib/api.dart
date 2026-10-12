@@ -132,12 +132,15 @@ class Api {
   final Session session;
   final Dio _dio;
 
+  /// The underlying client, for the console calls in console_api.dart.
+  Dio get dio => _dio;
+
   /// Exchange a username/password for a long-lived token; throws a readable message on failure.
   static Future<Session> login(String server, String username, String password, String device) async {
     final base = normalizeServer(server);
     try {
       final response = await Dio(BaseOptions(baseUrl: base, connectTimeout: const Duration(seconds: 10)))
-          .post('/api/auth/app-login', data: {'username': username, 'password': password, 'device': device});
+          .post('/api/auth/app-login', data: {'username': username, 'password': password, 'device': device, 'scope': 'manage'});
       return Session(base, response.data['token'] as String);
     } on DioException catch (e) {
       if (e.response?.statusCode == 401) throw '用户名或密码错误';
