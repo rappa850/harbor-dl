@@ -19,6 +19,9 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+MAX_RESUMES = 3   # automatic re-queues after service restarts before a task needs a manual retry
+
+
 class DownloadManager:
     def __init__(self, store: Store, root: Path, command_builder=None):
         self.store, self.root = store, root.resolve()
@@ -105,11 +108,18 @@ class DownloadManager:
 
     async def start(self):
         with self.store.connect() as db:
-            interrupted = db.execute('SELECT id FROM tasks WHERE status IN ("DOWNLOADING","PROCESSING")').fetchall()
+            interrupted = db.execute('SELECT id,resumes FROM tasks WHERE status IN ("DOWNLOADING","PROCESSING")').fetchall()
             for row in interrupted:
-                db.execute('UPDATE tasks SET status=?,error=?,speed="",updated_at=? WHERE id=?',
-                           ('ERROR', '服务上次退出时任务尚未完成，请重试', now(), row['id']))
-                self.event(db, row['id'], 'ERROR', '服务中断，任务等待手动重试')
+                if row['resumes'] >= MAX_RESUMES:
+                    # A task that keeps dying with the service is more likely the cause than the victim.
+                    db.execute('UPDATE tasks SET status=?,error=?,speed="",updated_at=? WHERE id=?',
+                               ('ERROR', '服务多次中断时任务尚未完成，请重试', now(), row['id']))
+                    self.event(db, row['id'], 'ERROR', '服务多次中断，任务等待手动重试')
+                    continue
+                shutil.rmtree(self.root / row['id'], ignore_errors=True)
+                db.execute('UPDATE tasks SET status="PENDING",error="",progress=0,downloaded=0,total=0,speed="",'
+                           'file_path=NULL,resumes=resumes+1,updated_at=? WHERE id=?', (now(), row['id']))
+                self.event(db, row['id'], 'PENDING', '服务重启，任务已自动重新加入队列')
         self.loop_task = asyncio.create_task(self.schedule())
 
     async def stop(self):

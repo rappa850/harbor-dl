@@ -3,18 +3,30 @@ import re
 from urllib.parse import parse_qs, urlsplit
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from .media import share_url
 from .subscriptions import SubscriptionConfig
 
 
 class ProfileInput(BaseModel):
     platform: Literal['youtube','youtube_playlist','bilibili','douyin']
-    profile_url: str = Field(min_length=1,max_length=8192)
+    profile_url: str = Field(default='',max_length=8192)
     youtube_tab_type: Literal['videos','shorts'] = 'videos'
     nickname: str = Field(default='',max_length=256)
     update_interval: float = Field(default=28800,ge=0,allow_inf_nan=False)
-    auto_download: bool = True
+    auto_download: bool | None = None            # None = the source's default (off for likes and favorites)
+    source: Literal['user','like','favorite','mix'] = 'user'   # douyin: an author, my likes, my favorites, a mix (合集)
+
+    @model_validator(mode='after')
+    def check_source(self):
+        if self.source!='user' and self.platform!='douyin':raise ValueError('只有抖音支持点赞、收藏和合集订阅')
+        if self.source in ('user','mix') and not self.profile_url.strip():raise ValueError('请输入链接')
+        return self
+
+    @property
+    def wants_auto_download(self):
+        if self.auto_download is not None:return self.auto_download
+        return self.source not in ('like','favorite')
 
 
 def profile_url(payload):
@@ -70,6 +82,6 @@ class ProfileResolver:
                    info.get('channel') or info.get('uploader')) or user_id
         return SubscriptionConfig(platform=payload.platform,user_id=user_id,profile_url=url,nickname=nickname,
             nickname_locked=bool(payload.nickname.strip()),update_interval=payload.update_interval,
-            auto_download=payload.auto_download,youtube_tab_type=payload.youtube_tab_type if payload.platform=='youtube' else None,
+            auto_download=payload.wants_auto_download,youtube_tab_type=payload.youtube_tab_type if payload.platform=='youtube' else None,
             subscription_type='playlist' if payload.platform=='youtube_playlist' else 'user',
             avatar_url=info.get('thumbnail'))

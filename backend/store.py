@@ -90,10 +90,19 @@ class Store:
                                      'thumbnail': 'INTEGER NOT NULL DEFAULT 1',
                                      'author': "TEXT NOT NULL DEFAULT ''",
                                      'subscription_id': 'TEXT',
-                                     'source': "TEXT NOT NULL DEFAULT 'universal'"}.items():
+                                     'source': "TEXT NOT NULL DEFAULT 'universal'",
+                                     'resumes': 'INTEGER NOT NULL DEFAULT 0'}.items():
                 if name not in columns:
                     db.execute(f'ALTER TABLE tasks ADD COLUMN {name} {definition}')
             video_columns={row['name'] for row in db.execute('PRAGMA table_info(subscription_videos)')}
+            state_columns={row['name'] for row in db.execute('PRAGMA table_info(subscription_states)')}
+            token_columns={row['name'] for row in db.execute('PRAGMA table_info(api_tokens)')}
+            if 'scope' not in token_columns:
+                db.execute("ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'manage'")
+            if 'more_available' not in state_columns:
+                db.execute('ALTER TABLE subscription_states ADD COLUMN more_available INTEGER NOT NULL DEFAULT 0')
+            if 'auth_expired' not in state_columns:
+                db.execute('ALTER TABLE subscription_states ADD COLUMN auth_expired INTEGER NOT NULL DEFAULT 0')
             if 'download_file_path' not in video_columns:
                 db.execute('ALTER TABLE subscription_videos ADD COLUMN download_file_path TEXT')
             db.execute('PRAGMA user_version=15')

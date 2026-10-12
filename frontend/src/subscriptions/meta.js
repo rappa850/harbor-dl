@@ -8,6 +8,11 @@ export const PLATFORMS={
 export const platformLabel=(item)=>{
   const base=PLATFORMS[item.platform]?.label||item.platform
   if(item.platform==='youtube'&&item.youtube_tab_type==='shorts')return 'YouTube Shorts'
+  if(item.platform==='douyin'){
+    if(item.subscription_type==='like')return '抖音·我的点赞'
+    if(item.subscription_type==='favorite')return '抖音·我的收藏'
+    if(item.subscription_type==='mix')return '抖音·合集'
+  }
   if(item.subscription_type==='favorite'&&!base.includes('点赞'))return base+'·收藏'
   return base
 }

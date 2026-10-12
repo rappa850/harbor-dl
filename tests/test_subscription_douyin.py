@@ -170,12 +170,16 @@ class IdentityTests(DouyinCase):
 
     def test_unsupported_douyin_types_are_flagged_not_silently_fetched(self):
         self.client.post('/api/backup/subscriptions/import',json={'subscriptions':[
-            {'platform':'douyin','user_id':SEC,'subscription_type':'favorite'},{'platform':'douyin_collection','user_id':'7407257750834513958','subscription_type':'collection'}]})
+            {'platform':'douyin','user_id':SEC,'subscription_type':'playlist'},{'platform':'douyin','user_id':'7407257750834513958','subscription_type':'mix'},
+            {'platform':'douyin','user_id':'short','subscription_type':'like'}]})
         items=self.client.get('/api/subscriptions').json()['items']
-        favorite=next(i for i in items if i['subscription_type']=='favorite')
-        self.assertFalse(favorite['runtime']['manual_sync_available']);self.assertIn('尚未适配',favorite['runtime']['unavailable_reason'])
-        self.assertEqual(self.client.post('/api/subscriptions/'+favorite['id']+'/sync').status_code,422)
-        self.assertEqual(self.client.post('/api/subscriptions/'+favorite['id']+'/check').status_code,422)
+        self.assertEqual(len(items),3)
+        for item in items:
+            self.assertFalse(item['runtime']['manual_sync_available'],item['subscription_type'])
+            self.assertTrue(item['runtime']['unavailable_reason'])
+            self.assertEqual(self.client.post('/api/subscriptions/'+item['id']+'/sync').status_code,422)
+            self.assertEqual(self.client.post('/api/subscriptions/'+item['id']+'/check').status_code,422)
+        self.assertIn('尚未适配',next(i for i in items if i['subscription_type']=='playlist')['runtime']['unavailable_reason'])
 
 
 class CatalogTests(DouyinCase):
@@ -232,6 +236,20 @@ class CheckTests(DouyinCase):
         self.assertEqual(len(self.fake.calls('/aweme/post/')),1+2)
         self.assertEqual(self.client.get('/api/tasks?subscription_id='+item['id']).json()['total'],5)
 
+    def test_check_reports_when_the_page_limit_may_hide_more_new_works(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(1)]]);self.client.post(base+'/check')
+        self.fake.serve([[aweme(100+n*10+k) for k in range(3)] for n in range(8)])
+        result=self.client.post(base+'/check').json()
+        self.assertEqual(result['pages'],5);self.assertTrue(result['may_have_more'])
+        self.assertTrue(self.client.get(base).json()['runtime']['more_available'])
+        self.fake.serve([[aweme(1)]])
+        self.assertFalse(self.client.post(base+'/check').json()['may_have_more'])
+        self.assertFalse(self.client.get(base).json()['runtime']['more_available'])
+        self.fake.serve([[aweme(100+n*10+k) for k in range(3)] for n in range(8)]);self.client.post(base+'/check')
+        self.fake.serve([[aweme(500)]]);self.client.post(base+'/sync')
+        self.assertFalse(self.client.get(base).json()['runtime']['more_available'])
+
     def test_auto_download_off_and_failure_state(self):
         item,base=self.make(False)
         self.fake.serve([[aweme(1)]]);result=self.client.post(base+'/check').json()
@@ -242,6 +260,41 @@ class CheckTests(DouyinCase):
         state=self.client.get(base).json()['runtime']
         self.assertIn('Cookie',state['last_error']);self.assertTrue(state['last_success_at'])
         self.assertEqual(self.client.get(base+'/videos').json()['total'],1)
+
+    def test_expired_login_is_flagged_and_cleared_by_a_good_check(self):
+        item,base=self.make(False)
+        self.client.put('/api/network/cookies/douyin',json={'cookie_content':'ttwid=t; UIFID=device-123'})
+        self.fake.empty=True
+        self.assertEqual(self.client.post(base+'/check').status_code,502)
+        self.assertFalse(self.client.get(base).json()['runtime']['auth_expired'],'an empty answer with a saved login is risk control')
+        self.fake.pages={};self.fake.profile={}
+        def expired(request):return httpx.Response(200,json={'status_code':8,'status_msg':'未登录'})
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(expired)
+        self.assertEqual(self.client.post(base+'/check').status_code,502)
+        self.assertTrue(self.client.get(base).json()['runtime']['auth_expired'])
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(self.fake)
+        self.fake.empty=False;self.fake.serve([[aweme(1)]])
+        self.assertEqual(self.client.post(base+'/check').status_code,200)
+        self.assertFalse(self.client.get(base).json()['runtime']['auth_expired'])
+
+    def test_failed_sync_with_expired_login_is_flagged(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(1)]]);self.client.post(base+'/check')
+        def expired(request):return httpx.Response(200,json={'status_code':8,'status_msg':'未登录'})
+        self.app.state.catalog.registry.get('douyin').transport=httpx.MockTransport(expired)
+        self.assertEqual(self.client.post(base+'/sync').status_code,502)
+        self.assertTrue(self.client.get(base).json()['runtime']['auth_expired'])
+
+    def test_batch_download_limit_takes_the_newest_pending_works(self):
+        item,base=self.make(False)
+        self.fake.serve([[aweme(n) for n in range(1,6)]]);self.client.post(base+'/sync')    # aweme(1) is the newest
+        result=self.client.post(base+'/videos/download',json={'limit':2}).json()
+        self.assertEqual((result['requested'],result['queued']),(2,2))
+        titles={w['title']:w['status'] for w in self.client.get(base+'/videos?page_size=100').json()['videos']}
+        self.assertEqual(titles['作品 1'],'downloading');self.assertEqual(titles['作品 2'],'downloading');self.assertEqual(titles['作品 3'],'not_downloaded')
+        self.assertEqual(self.client.post(base+'/videos/download',json={'limit':0}).status_code,422)
+        rest=self.client.post(base+'/videos/download',json={'limit':50}).json()
+        self.assertEqual(rest['queued'],3)
 
     def test_busy_missing_and_unsupported(self):
         item,base=self.make(False)

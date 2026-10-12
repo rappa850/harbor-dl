@@ -28,8 +28,9 @@ class SubscriptionPlaybackTests(unittest.TestCase):
     def works(self, scope):
         return self.client.get(f'/api/subscriptions/{scope}/videos').json()['videos']
 
-    def complete(self, scope, work, registered=True, extension='wav'):
-        task = self.client.post(f'/api/subscriptions/{scope}/videos/{work["id"]}/download', json={}).json()
+    def complete(self, scope, work, registered=True, extension='wav', separate=False):
+        # the fixture serves the same work ids to both tabs; a work shared across subscriptions is normally downloaded once
+        task = self.client.post(f'/api/subscriptions/{scope}/videos/{work["id"]}/download', json={'redownload': separate}).json()
         manager = self.app.state.manager
         folder = manager.root / task['id']
         folder.mkdir()
@@ -57,7 +58,7 @@ class SubscriptionPlaybackTests(unittest.TestCase):
         self.complete(scope, works[2], registered=False)
         self.complete(scope, works[3], extension='txt')
         self.client.post(f'/api/subscriptions/{scope}/videos/{works[4]["id"]}/download', json={})
-        self.complete(other, self.works(other)[0])
+        self.complete(other, self.works(other)[0], separate=True)
         playlist = self.playlist(scope)
         self.assertEqual(playlist['total'], 1)
         item = playlist['items'][0]

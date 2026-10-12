@@ -92,7 +92,7 @@ class TaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.get(task['id'])['subtitles'], 0)
         await self.manager.cancel(task['id'])
 
-    async def test_restart_marks_both_interrupted_phases(self):
+    async def test_restart_requeues_interrupted_phases(self):
         ids = []
         for status in ('DOWNLOADING', 'PROCESSING'):
             task = self.manager.create('https://example.org/video')
@@ -100,8 +100,21 @@ class TaskLifecycleTests(unittest.IsolatedAsyncioTestCase):
             with self.store.connect() as db:
                 db.execute('UPDATE tasks SET status=? WHERE id=?', (status, task['id']))
         await self.manager.start()
-        self.assertEqual([self.manager.get(i)['status'] for i in ids], ['ERROR', 'ERROR'])
-        self.assertTrue(all('重试' in self.manager.get(i)['error'] for i in ids))
+        for task_id in ids:
+            self.assertEqual(self.manager.get(task_id)['resumes'], 1)
+            messages = [row['message'] for row in self.store.all('SELECT message FROM task_events WHERE task_id=?', (task_id,))]
+            self.assertIn('服务重启，任务已自动重新加入队列', messages)
+            await until(lambda: self.manager.get(task_id)['status'] in ('PROCESSING', 'COMPLETED'))
+            await self.manager.cancel(task_id)
+
+    async def test_restart_gives_up_after_repeated_interruptions(self):
+        task = self.manager.create('https://example.org/video')
+        with self.store.connect() as db:
+            db.execute('UPDATE tasks SET status="DOWNLOADING",resumes=3 WHERE id=?', (task['id'],))
+        await self.manager.start()
+        row = self.manager.get(task['id'])
+        self.assertEqual(row['status'], 'ERROR')
+        self.assertIn('重试', row['error'])
 
     async def test_concurrency_and_cancel_wakes_next_task(self):
         with self.store.connect() as db:
